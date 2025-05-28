@@ -16,8 +16,7 @@ const config = {
 			pages: 'build',
 			assets: 'build',
 			fallback: null,
-			precompress: false,
-			manifest: 'manifest.json'
+			precompress: false
 		}),
 		appDir: 'app'
 	}
