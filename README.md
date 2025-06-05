@@ -1,21 +1,5 @@
-# SvelteKit Extension Template
-By Luke Hagar
-
-
-Built with [Sveltekit](https://kit.svelte.dev) and [Skeleton](https://www.skeleton.dev)
-
-Out of the box Includes:
-   * [x] Skeleton
-   * [x] Tailwind
-   * [x] Chrome Types
-   * [x] ESlint
-   * [x] Prettier
-   * [x] TypeScript
-   * [x] Vite
-   * [x] Vitest
-
-
-
+# Context Limiter
+Built with [SvelteKit Extension Template ](https://github.com/LukeHagar/sveltekit-extension-template)
 
 ## Reference Documentation
 

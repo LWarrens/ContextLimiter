@@ -120,20 +120,6 @@ export const windowsDisplay = derived(
   ([counts, cfg]) => `${counts.totalWindows}/${cfg.maxWindows}`
 );
 
-export const filterModeInfo = derived(
-  config,
-  (cfg) => {
-    const modeText = cfg.filterMode === 'restrictlist'
-      ? 'Including'
-      : cfg.filterMode === 'unrestrictlist'
-        ? 'Excluding'
-        : cfg.filterMode === 'allowlist'
-          ? 'Allow Only'
-          : 'Block Specific';
-    return `Filter Mode: ${modeText} ${cfg.filters.length} patterns`;
-  }
-);
-
 // Configuration management functions
 export function updateConfig(updates: Partial<TabLimiterConfig>) {
   if ('enabled' in updates) {

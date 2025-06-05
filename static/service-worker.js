@@ -167,68 +167,31 @@ function saveConfig(callback) {
   });
 }
 
-// Check if a URL matches any filter in the list
+// Glob matching function: supports *, ?, and escapes. Case-insensitive.
+function globMatch(str, pattern) {
+  // Escape regex special chars except * and ?
+  let regexStr = pattern.replace(/([.+^=!:${}()|\[\]\\])/g, '\\$1')
+    .replace(/\*/g, '.*')
+    .replace(/\?/g, '.');
+  // Anchor to start/end
+  regexStr = '^' + regexStr + '$';
+  try {
+    return new RegExp(regexStr, 'i').test(str);
+  } catch (e) {
+    console.error('[ContextLimiter] Invalid glob pattern:', pattern, e);
+    return false;
+  }
+}
+
+// Check if a URL matches any filter in the list using glob-based matching
 function urlMatchesFilters(url, filters) {
   if (!filters || filters.length === 0) return false;
-
-  return filters.some(filter => {
-    try {
-      const pattern = filter.trim();
-
-      // Special handling for browser protocol URLs
-      if (pattern.includes('://')) {
-        // For protocol wildcards (e.g., *://newtab)
-        if (pattern.startsWith('*://')) {
-          // Extract the path part after the wildcard protocol
-          const pathPart = pattern.substring(4); // Skip '*://'
-
-          // Handle the case where URL might not have "://" or might return -1
-          const protocolSeparatorIndex = url.indexOf('://');
-          if (protocolSeparatorIndex !== -1) {
-            // Get the part after "://"
-            const urlPath = url.substring(protocolSeparatorIndex + 3);
-            return urlPath.includes(pathPart);
-          } else {
-            // Fallback to a simple includes check if "://" not found
-            return url.includes(pathPart);
-          }
-        }
-        // For browser protocol URLs with wildcards (e.g., brave://*)
-        else if (pattern.includes('*')) {
-          const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
-          return regex.test(url);
-        }
-        // Exact protocol URL match
-        else {
-          return url === pattern;
-        }
-      }
-
-      // Special case for browser protocol URLs without http/https (e.g., "//newtab")
-      if (pattern.startsWith('//')) {
-        const pathToMatch = pattern.substring(2); // Remove '//'
-        // Check if URL contains this path after protocol separator
-        const protocolSeparatorIndex = url.indexOf('://');
-        if (protocolSeparatorIndex !== -1) {
-          const urlPath = url.substring(protocolSeparatorIndex + 3);
-          return urlPath.includes(pathToMatch);
-        } else {
-          return url.includes(pathToMatch);
-        }
-      }
-
-      // For simple string matches with wildcards
-      if (pattern.includes('*')) {
-        const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
-        return regex.test(url);
-      }
-
-      // Direct string match
-      return url.includes(pattern);
-    } catch (e) {
-      console.error('Error matching filter:', pattern, e);
-      return false;
-    }
+  return filters.some(pattern => {
+    pattern = pattern.trim();
+    if (!pattern) return false;
+    // Log for debugging
+    // console.log('[ContextLimiter] Matching URL', url, 'against glob', pattern);
+    return globMatch(url, pattern);
   });
 }
 
@@ -388,6 +351,12 @@ function filterWindowsForWindowCounting(windows) {
 // Check if creating a new tab would exceed limits
 async function wouldExceedLimits(newTabUrl, windowId) {
   if (!config.enabled) return false;
+
+  // If filtering is effectively disabled, never enforce limits
+  if (!Array.isArray(config.filters) || config.filters.length === 0 ||
+    (config.filterMode !== 'restrictlist' && config.filterMode !== 'unrestrictlist')) {
+    return false;
+  }
 
   try {
     const [tabs, allWindows] = await Promise.all([

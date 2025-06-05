@@ -27,27 +27,33 @@
 	<title>Context Limiter</title>
 </svelte:head>
 
-<div class="min-h-screen bg-surface-50 dark:bg-surface-900">
+<div
+	class="min-h-screen"
+	style="background-color: var(--color-surface-200); font-family: var(--base-font-family);"
+>
 	<!-- Header with Navigation and Toggle -->
 	<header
-		class="bg-white dark:bg-surface-800 border-b border-surface-300 dark:border-surface-600 sticky top-0 z-10"
+		style="background-color: var(--color-surface-100); border-bottom: 1px solid var(--color-surface-300); position: sticky; top: 0; z-index: 10;"
 	>
 		<div class="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-			<div class="flex space-x-1 bg-surface-100 dark:bg-surface-700 rounded-lg p-1">
+			<div
+				class="flex space-x-1 rounded-lg p-1"
+				style="background-color: var(--color-surface-100);"
+			>
 				<button
-					class="px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 {activeTab ===
-					'status'
-						? 'bg-white dark:bg-surface-600 text-surface-900 dark:text-surface-100 shadow-sm'
-						: 'text-surface-600 dark:text-surface-300 hover:text-surface-900 dark:hover:text-surface-100'}"
+					class="px-4 py-2 rounded-md text-sm font-medium transition-all duration-200"
+					style={activeTab === 'status'
+						? 'background-color: var(--color-surface-200); color: var(--color-surface-900); box-shadow: 0 1px 2px 0 var(--color-surface-300);'
+						: 'color: var(--color-surface-600);'}
 					on:click={() => setActiveTab('status')}
 				>
 					Status
 				</button>
 				<button
-					class="px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 {activeTab ===
-					'settings'
-						? 'bg-white dark:bg-surface-600 text-surface-900 dark:text-surface-100 shadow-sm'
-						: 'text-surface-600 dark:text-surface-300 hover:text-surface-900 dark:hover:text-surface-100'}"
+					class="px-4 py-2 rounded-md text-sm font-medium transition-all duration-200"
+					style={activeTab === 'settings'
+						? 'background-color: var(--color-surface-200); color: var(--color-surface-900); box-shadow: 0 1px 2px 0 var(--color-surface-300);'
+						: 'color: var(--color-surface-600);'}
 					on:click={() => setActiveTab('settings')}
 				>
 					Settings
@@ -58,17 +64,19 @@
 				<label class="flex items-center space-x-3">
 					<input type="checkbox" class="sr-only" bind:checked={enabled} on:change={toggleEnabled} />
 					<div
-						class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 {enabled
-							? 'bg-primary-500'
-							: 'bg-surface-300 dark:bg-surface-600'}"
+						class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200"
+						style="background-color: {enabled
+							? 'var(--color-primary-500)'
+							: 'var(--color-surface-300)'};"
 					>
 						<div
-							class="absolute left-1 top-1 h-4 w-4 rounded-full bg-white transition-transform duration-200 {enabled
-								? 'translate-x-5'
-								: 'translate-x-0'}"
+							class="absolute left-1 top-1 h-4 w-4 rounded-full transition-transform duration-200"
+							style="background-color: var(--color-surface-50); transform: {enabled
+								? 'translateX(1.25rem)'
+								: 'translateX(0)'};"
 						></div>
 					</div>
-					<span class="text-sm font-medium text-surface-700 dark:text-surface-300"
+					<span class="text-sm font-medium" style="color: var(--color-surface-700);"
 						>{enabled ? 'Enabled' : 'Disabled'}</span
 					>
 				</label>
@@ -86,4 +94,9 @@
 	</main>
 </div>
 
-<!-- No styles needed, using inline classes -->
+<style>
+	/* Global styles for the page */
+	:global(body) {
+		color: var(--color-surface-950);
+	}
+</style>

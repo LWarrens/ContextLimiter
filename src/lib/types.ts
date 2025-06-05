@@ -32,13 +32,6 @@ export interface TabCounts {
   }>;
 }
 
-export interface FilterPreset {
-  name: string;
-  description: string;
-  filters: string[];
-  filterMode?: string;
-}
-
 export type WindowType = 'normal' | 'popup' | 'panel' | 'app' | 'devtools';
 
 export const DEFAULT_CONFIG: TabLimiterConfig = {
@@ -58,65 +51,4 @@ export const DEFAULT_CONFIG: TabLimiterConfig = {
   excludeDevtoolsForWindows: false,
   excludePanelForWindows: false,
   excludeAppForWindows: false
-};
-
-export const FILTER_PRESETS: Record<string, FilterPreset> = {
-  social: {
-    name: 'Social Media',
-    description: 'Common social media platforms',
-    filters: [
-      '*://facebook.com/*',
-      '*://twitter.com/*',
-      '*://instagram.com/*',
-      '*://linkedin.com/*',
-      '*://reddit.com/*',
-      '*://tiktok.com/*'
-    ]
-  },
-  productivity: {
-    name: 'Productivity',
-    description: 'Work and productivity tools',
-    filters: [
-      '*://docs.google.com/*',
-      '*://drive.google.com/*',
-      '*://office.com/*',
-      '*://notion.so/*',
-      '*://slack.com/*',
-      '*://trello.com/*'
-    ]
-  },
-  news: {
-    name: 'News',
-    description: 'News and media sites',
-    filters: [
-      '*://cnn.com/*',
-      '*://bbc.com/*',
-      '*://reuters.com/*',
-      '*://npr.org/*',
-      '*://theguardian.com/*'
-    ]
-  },
-  entertainment: {
-    name: 'Entertainment',
-    description: 'Entertainment and streaming platforms',
-    filters: [
-      '*://youtube.com/*',
-      '*://netflix.com/*',
-      '*://twitch.tv/*',
-      '*://spotify.com/*',
-      '*://hulu.com/*'
-    ]
-  },
-  browser: {
-    name: 'Browser Pages',
-    description: 'Browser-specific pages and new tabs',
-    filters: [
-      'chrome://*',
-      'brave://*',
-      'edge://*',
-      'firefox://*',
-      '*://newtab',
-      'about:*'
-    ]
-  }
 };
