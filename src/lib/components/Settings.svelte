@@ -118,37 +118,35 @@
 			Configure maximum tab and window counts
 		</p>
 
-		<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-			<div class="form-group">
-				<label for="maxTabs" class="label">Maximum Total Tabs</label>
+		<div class="tab-limits-row">
+			<div class="form-group compact">
+				<label for="maxTabs" class="label">Total Tabs</label>
 				<input
 					type="number"
 					id="maxTabs"
-					class="input"
+					class="input compact"
 					min="1"
 					value={$config.maxTabs}
 					on:blur={(e) => handleNumericChange('maxTabs', e.currentTarget.value)}
 				/>
 			</div>
-
-			<div class="form-group">
-				<label for="maxWindowTabs" class="label">Maximum Tabs Per Window</label>
+			<div class="form-group compact">
+				<label for="maxWindowTabs" class="label">Per Window</label>
 				<input
 					type="number"
 					id="maxWindowTabs"
-					class="input"
+					class="input compact"
 					min="1"
 					value={$config.maxWindowTabs}
 					on:blur={(e) => handleNumericChange('maxWindowTabs', e.currentTarget.value)}
 				/>
 			</div>
-
-			<div class="form-group">
-				<label for="maxWindows" class="label">Maximum Windows</label>
+			<div class="form-group compact">
+				<label for="maxWindows" class="label">Windows</label>
 				<input
 					type="number"
 					id="maxWindows"
-					class="input"
+					class="input compact"
 					min="1"
 					value={$config.maxWindows}
 					on:blur={(e) => handleNumericChange('maxWindows', e.currentTarget.value)}
@@ -403,6 +401,21 @@
 	.settings-container {
 		max-width: 400px;
 		margin: 0 auto;
+	}
+	.tab-limits-row {
+		display: flex;
+		gap: 0.75rem;
+		align-items: flex-end;
+		margin-bottom: 0.5rem;
+	}
+	.form-group.compact {
+		flex: 1 1 0;
+		margin-bottom: 0;
+	}
+	.input.compact {
+		width: 60px;
+		padding: 0.3rem 0.5rem;
+		font-size: 0.95rem;
 	}
 	.form-group {
 		display: flex;
