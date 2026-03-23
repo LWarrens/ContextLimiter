@@ -1,12 +1,20 @@
 // Type definitions for Context Limiter
 
+export type FilterAction = 'count' | 'ignore';
+
+export interface FilterRule {
+  pattern: string;
+  action: FilterAction;
+  enabled?: boolean;
+}
+
 export interface TabLimiterConfig {
   enabled: boolean;
   maxTabs: number;
   maxWindowTabs: number;
   maxWindows: number;
-  filterMode: 'restrictlist' | 'unrestrictlist' | 'allowlist' | 'denylist';
-  filters: string[];
+  filterDefaultAction: FilterAction;
+  filterRules: FilterRule[];
   // Window type exclusions for tab counting
   excludedWindowTypesForTabs: WindowType[];
   // Window type exclusions for window counting  
@@ -39,8 +47,8 @@ export const DEFAULT_CONFIG: TabLimiterConfig = {
   maxTabs: 200,
   maxWindowTabs: 20,
   maxWindows: 20,
-  filterMode: 'restrictlist',
-  filters: [],
+  filterDefaultAction: 'ignore',
+  filterRules: [],
   excludedWindowTypesForTabs: [],
   excludedWindowTypesForWindows: [],
   excludePopupForTabs: false,

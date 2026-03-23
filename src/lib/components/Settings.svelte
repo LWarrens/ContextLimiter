@@ -1,11 +1,12 @@
 <script lang="ts">
 	import { config, updateConfig, resetConfig } from '$lib/stores';
-	import { type WindowType } from '$lib/types';
+	import { type FilterAction, type FilterRule, type WindowType } from '$lib/types';
 	import { isValidUrlPattern } from '$lib/stores';
 
 	let saveMessage = '';
 	let saveError = false;
 	let newFilter = '';
+	let newRuleAction: FilterAction = 'count';
 	let filterError = '';
 
 	// Handle numeric input changes
@@ -38,14 +39,13 @@
 		showSaveMessage('Settings saved', false);
 	}
 
-	// Handle filter mode change
-	function handleFilterModeChange(value: string) {
-		updateConfig({ filterMode: value as any });
+	function handleDefaultActionChange(action: FilterAction) {
+		updateConfig({ filterDefaultAction: action });
 		showSaveMessage('Settings saved', false);
 	}
 
-	// Add new filter
-	function addFilter() {
+	// Add new rule
+	function addRule() {
 		const filter = newFilter.trim();
 
 		if (!filter) {
@@ -58,22 +58,43 @@
 			return;
 		}
 
-		if ($config.filters.includes(filter)) {
-			showFilterError('Filter already exists');
+		if ($config.filterRules.some((rule) => rule.pattern === filter && rule.action === newRuleAction)) {
+			showFilterError('Rule already exists');
 			return;
 		}
 
-		updateConfig({ filters: [...$config.filters, filter] });
+		const nextRules: FilterRule[] = [
+			...$config.filterRules,
+			{ pattern: filter, action: newRuleAction, enabled: true }
+		];
+		updateConfig({ filterRules: nextRules });
 		newFilter = '';
 		filterError = '';
-		showSaveMessage('Filter added', false);
+		showSaveMessage('Rule added', false);
 	}
 
-	// Remove filter
-	function removeFilter(index: number) {
-		const newFilters = $config.filters.filter((_, i) => i !== index);
-		updateConfig({ filters: newFilters });
-		showSaveMessage('Filter removed', false);
+	function removeRule(index: number) {
+		const nextRules = $config.filterRules.filter((_, i) => i !== index);
+		updateConfig({ filterRules: nextRules });
+		showSaveMessage('Rule removed', false);
+	}
+
+	function toggleRuleEnabled(index: number) {
+		const nextRules = $config.filterRules.map((rule, i) =>
+			i === index ? { ...rule, enabled: rule.enabled === false ? true : false } : rule
+		);
+		updateConfig({ filterRules: nextRules });
+		showSaveMessage('Rule updated', false);
+	}
+
+	function toggleRuleAction(index: number) {
+		const nextRules = $config.filterRules.map((rule, i) =>
+			i === index
+				? { ...rule, action: rule.action === 'count' ? 'ignore' : 'count' as FilterAction }
+				: rule
+		);
+		updateConfig({ filterRules: nextRules });
+		showSaveMessage('Rule updated', false);
 	}
 
 	// Reset to defaults
@@ -105,7 +126,7 @@
 	// Handle Enter key in filter input
 	function handleFilterKeypress(event: KeyboardEvent) {
 		if (event.key === 'Enter') {
-			addFilter();
+			addRule();
 		}
 	}
 </script>
@@ -298,58 +319,96 @@
 	<!-- URL Filtering Section -->
 	<section class="card p-6">
 		<h2 class="h3 font-bold mb-2">URL Filtering</h2>
-		<p style="color: var(--color-surface-600);" class="mb-4">Set URL patterns to filter tabs</p>
+		<p style="color: var(--color-surface-600);" class="mb-4">Use explicit rules with a default action</p>
 
 		<div class="space-y-4">
 			<div>
-				<label for="filterMode" class="label">Tab Limit Filter Mode</label>
-				<select
-					id="filterMode"
-					class="select"
-					value={$config.filterMode}
-					on:change={(e) => handleFilterModeChange(e.currentTarget.value)}
-				>
-					<option value="restrictlist">Only limit tabs with URLs that match filters</option>
-					<option value="unrestrictlist"
-						>Limit all tabs, while ignoring tabs with URLs that match filters</option
+				<p class="label">Default Action</p>
+				<div class="switch-row">
+					<button
+						type="button"
+						class="switch-btn {$config.filterDefaultAction === 'ignore' ? 'active' : ''}"
+						on:click={() => handleDefaultActionChange('ignore')}
 					>
-				</select>
+						Ignore by default
+					</button>
+					<button
+						type="button"
+						class="switch-btn {$config.filterDefaultAction === 'count' ? 'active' : ''}"
+						on:click={() => handleDefaultActionChange('count')}
+					>
+						Count by default
+					</button>
+					<div
+						class="switch-slider"
+						style="left: {$config.filterDefaultAction === 'ignore' ? '0%' : '50%'}"
+					></div>
+				</div>
 			</div>
 
-			<!-- Add Filter -->
+			<!-- Add Rule -->
 			<div>
-				<label for="newFilter" class="label">Add URL Pattern</label>
-				<div class="input-group input-group-divider grid-cols-[1fr_auto]">
+				<p class="label">Add Rule</p>
+				<div class="switch-row">
+					<span id="ruleActionLabel" class="sr-only">Rule action</span>
+					<button
+						type="button"
+						class="switch-btn {newRuleAction === 'count' ? 'active' : ''}"
+						on:click={() => (newRuleAction = 'count')}
+					>
+						Count matches
+					</button>
+					<button
+						type="button"
+						class="switch-btn {newRuleAction === 'ignore' ? 'active' : ''}"
+						on:click={() => (newRuleAction = 'ignore')}
+					>
+						Ignore matches
+					</button>
+					<div
+						class="switch-slider"
+						style="left: {newRuleAction === 'count' ? '0%' : '50%'}"
+					></div>
+				</div>
+				<div class="input-group input-group-divider grid-cols-[1fr_auto] add-filter-group">
 					<input
 						type="text"
 						id="newFilter"
 						placeholder="example.com or *.example.com"
 						bind:value={newFilter}
 						on:keypress={handleFilterKeypress}
+						class="add-filter-input"
 					/>
-					<button class="variant-filled-secondary" on:click={addFilter}>Add</button>
+					<button class="add-btn" on:click={addRule}>Add</button>
 				</div>
 				{#if filterError}
 					<p class="text-error-500 text-sm mt-1">{filterError}</p>
 				{/if}
 			</div>
-			<!-- Current Filters -->
+			<!-- Current Rules -->
 			<div>
-				<h4 class="h5 font-semibold mb-2">Current Filters</h4>
+				<h4 class="h5 font-semibold mb-2">Current Rules</h4>
 				<div class="space-y-2 mt-2">
-					{#if $config.filters.length === 0}
+					{#if $config.filterRules.length === 0}
 						<p style="color: var(--color-surface-500);" class="italic">
-							No filters added. Add patterns above.
+							No rules added. Add rules above.
 						</p>
 					{:else}
-						{#each $config.filters as filter, index}
-							<div
-								class="flex items-center justify-between bg-surface-100 dark:bg-surface-800 p-2 rounded"
-							>
-								<span class="font-mono text-sm">{filter}</span>
+						{#each $config.filterRules as rule, index}
+							<div class="filter-pill">
+								<button
+									class="btn btn-sm variant-soft"
+									on:click={() => toggleRuleEnabled(index)}
+								>
+									{rule.enabled === false ? 'Disabled' : 'Enabled'}
+								</button>
+								<button class="btn btn-sm variant-soft" on:click={() => toggleRuleAction(index)}>
+									{rule.action === 'count' ? 'Count' : 'Ignore'}
+								</button>
+								<span class="font-mono text-sm">{rule.pattern}</span>
 								<button
 									class="btn btn-sm variant-filled-error"
-									on:click={() => removeFilter(index)}
+									on:click={() => removeRule(index)}
 								>
 									×
 								</button>
@@ -402,6 +461,12 @@
 		max-width: 400px;
 		margin: 0 auto;
 	}
+	.card {
+		background-color: var(--color-surface-100);
+		/* Add a subtle shadow for card effect */
+		box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.04);
+		border-radius: var(--radius-container);
+	}
 	.tab-limits-row {
 		display: flex;
 		gap: 0.75rem;
@@ -428,5 +493,60 @@
 		border: 1px solid var(--color-surface-300);
 		border-radius: var(--radius-container);
 		background-color: var(--color-surface-50);
+	}
+	.switch-row {
+		position: relative;
+		display: flex;
+		width: 100%;
+		background: var(--color-surface-200);
+		border-radius: 999px;
+		margin: 0.5rem 0 1rem 0;
+		box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.03);
+	}
+	.switch-btn {
+		flex: 1 1 0;
+		padding: 0.5rem 1rem;
+		background: none;
+		border: none;
+		outline: none;
+		color: var(--color-surface-700);
+		font-size: 0.97rem;
+		font-weight: 500;
+		border-radius: 999px;
+		z-index: 1;
+		cursor: pointer;
+		transition: color 0.2s;
+	}
+	.switch-btn.active {
+		color: var(--color-primary-700);
+	}
+	.switch-slider {
+		position: absolute;
+		top: 2px;
+		left: 0;
+		width: 50%;
+		height: calc(100% - 4px);
+		background: var(--color-primary-100);
+		border-radius: 999px;
+		z-index: 0;
+		transition: left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+	}
+	.add-btn {
+		padding: 0.45rem 1.1rem;
+		font-size: 1rem;
+		font-weight: 500;
+		border: 1.5px solid var(--color-primary-400);
+		background: var(--color-primary-50);
+		color: var(--color-primary-700);
+		border-radius: var(--radius-container);
+		transition:
+			background 0.15s,
+			border 0.15s;
+		cursor: pointer;
+	}
+	.add-btn:hover,
+	.add-btn:focus {
+		background: var(--color-primary-100);
+		border-color: var(--color-primary-500);
 	}
 </style>

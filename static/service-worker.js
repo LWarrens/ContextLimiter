@@ -7,8 +7,8 @@ const DEFAULT_CONFIG = {
   maxTabs: 200,
   maxWindowTabs: 20,
   maxWindows: 20,
-  filterMode: 'restrictlist', // 'restrictlist' or 'unrestrictlist'
-  filters: [],
+  filterDefaultAction: 'ignore',
+  filterRules: [],
   // Window type exclusions for tab counting
   excludedWindowTypesForTabs: [],
   // Window type exclusions for window counting  
@@ -32,6 +32,9 @@ const newTabsTracker = new Set();
 
 // Keep track of connected clients (popup, settings)
 const connectedClients = new Set();
+
+// Cache compiled glob regexes to avoid recompiling on every tab check
+const globRegexCache = new Map();
 
 // Enhanced configuration loading with validation
 function loadConfig() {
@@ -58,21 +61,14 @@ function loadConfig() {
         config.maxWindows = result.tabLimiterConfig.maxWindows;
       }
 
-      // Filter mode must be one of the valid options
-      if (result.tabLimiterConfig.filterMode === 'restrictlist' || result.tabLimiterConfig.filterMode === 'unrestrictlist') {
-        config.filterMode = result.tabLimiterConfig.filterMode;
-      }
-      // Support legacy values for backward compatibility
-      if (result.tabLimiterConfig.filterMode === 'denylist') {
-        config.filterMode = 'restrictlist';
-      }
-      if (result.tabLimiterConfig.filterMode === 'allowlist') {
-        config.filterMode = 'unrestrictlist';
+      // Rule-based policy fields
+      if (result.tabLimiterConfig.filterDefaultAction === 'count' || result.tabLimiterConfig.filterDefaultAction === 'ignore') {
+        config.filterDefaultAction = result.tabLimiterConfig.filterDefaultAction;
       }
 
-      // Filters should be an array
-      if (Array.isArray(result.tabLimiterConfig.filters)) {
-        config.filters = result.tabLimiterConfig.filters;
+      if (Array.isArray(result.tabLimiterConfig.filterRules)) {
+        config.filterRules = result.tabLimiterConfig.filterRules;
+        clearGlobRegexCache();
       }
 
       // Handle window type exclusions arrays
@@ -167,32 +163,89 @@ function saveConfig(callback) {
   });
 }
 
+function clearGlobRegexCache() {
+  globRegexCache.clear();
+}
+
 // Glob matching function: supports *, ?, and escapes. Case-insensitive.
-function globMatch(str, pattern) {
+function getOrCreateGlobRegex(pattern) {
+  const normalizedPattern = String(pattern || '').trim();
+  if (!normalizedPattern) return null;
+
+  if (globRegexCache.has(normalizedPattern)) {
+    return globRegexCache.get(normalizedPattern);
+  }
+
   // Escape regex special chars except * and ?
-  let regexStr = pattern.replace(/([.+^=!:${}()|\[\]\\])/g, '\\$1')
+  let regexStr = normalizedPattern
+    .replace(/([.+^=!:${}()|\[\]\\])/g, '\\$1')
     .replace(/\*/g, '.*')
     .replace(/\?/g, '.');
+
   // Anchor to start/end
   regexStr = '^' + regexStr + '$';
+
   try {
-    return new RegExp(regexStr, 'i').test(str);
+    const compiled = new RegExp(regexStr, 'i');
+    globRegexCache.set(normalizedPattern, compiled);
+    return compiled;
   } catch (e) {
-    console.error('[ContextLimiter] Invalid glob pattern:', pattern, e);
-    return false;
+    console.error('[ContextLimiter] Invalid glob pattern:', normalizedPattern, e);
+    return null;
   }
 }
 
-// Check if a URL matches any filter in the list using glob-based matching
-function urlMatchesFilters(url, filters) {
-  if (!filters || filters.length === 0) return false;
-  return filters.some(pattern => {
-    pattern = pattern.trim();
-    if (!pattern) return false;
-    // Log for debugging
-    // console.log('[ContextLimiter] Matching URL', url, 'against glob', pattern);
-    return globMatch(url, pattern);
-  });
+function globMatch(str, pattern) {
+  const regex = getOrCreateGlobRegex(pattern);
+  return regex ? regex.test(str) : false;
+}
+
+function toRuleAction(action) {
+  return action === 'ignore' ? 'ignore' : 'count';
+}
+
+function toDefaultAction(action) {
+  return action === 'count' ? 'count' : 'ignore';
+}
+
+function getEffectiveFilterPolicy() {
+  const customRules = Array.isArray(config.filterRules)
+    ? config.filterRules
+      .map((rule) => {
+        const pattern = String(rule?.pattern || '').trim();
+        if (!pattern) return null;
+        return {
+          pattern,
+          action: toRuleAction(rule?.action),
+          enabled: rule?.enabled !== false
+        };
+      })
+      .filter(Boolean)
+    : [];
+
+  return {
+    defaultAction: toDefaultAction(config.filterDefaultAction),
+    rules: customRules
+  };
+}
+
+function getUrlRuleDecision(url, policy) {
+  const rules = Array.isArray(policy?.rules) ? policy.rules : [];
+
+  for (const rule of rules) {
+    if (rule.enabled === false) continue;
+    if (globMatch(url, rule.pattern)) {
+      return rule.action;
+    }
+  }
+
+  return policy?.defaultAction === 'count' ? 'count' : 'ignore';
+}
+
+function shouldCountUrl(url) {
+  if (!url) return false;
+  const policy = getEffectiveFilterPolicy();
+  return getUrlRuleDecision(url, policy) === 'count';
 }
 
 // Function to get current tab counts with filtering and active tab titles
@@ -317,12 +370,7 @@ function broadcastConfigUpdate() {
 // Create a common function for filtering tabs to reduce code duplication
 function filterCountedTabs(tabs) {
   return tabs.filter(t => {
-    if (!t.url) return false;
-    const tabUrlMatches = urlMatchesFilters(t.url, config.filters);
-
-    // restrictlist: only count tabs that match filters (restrict/limit these specific tabs)
-    // unrestrictlist: count all tabs except those that match filters (unrestrict/don't limit these specific tabs)
-    return config.filterMode === 'restrictlist' ? tabUrlMatches : !tabUrlMatches;
+    return shouldCountUrl(t.url);
   });
 }
 
@@ -351,12 +399,6 @@ function filterWindowsForWindowCounting(windows) {
 // Check if creating a new tab would exceed limits
 async function wouldExceedLimits(newTabUrl, windowId) {
   if (!config.enabled) return false;
-
-  // If filtering is effectively disabled, never enforce limits
-  if (!Array.isArray(config.filters) || config.filters.length === 0 ||
-    (config.filterMode !== 'restrictlist' && config.filterMode !== 'unrestrictlist')) {
-    return false;
-  }
 
   try {
     const [tabs, allWindows] = await Promise.all([
@@ -401,9 +443,7 @@ async function wouldExceedLimits(newTabUrl, windowId) {
 
       const windowTabs = tabs.filter(tab => tab.windowId === windowId);
       const countedWindowTabs = filterCountedTabs(windowTabs);
-      // Check if the new tab would be counted toward limits
-      const mockTab = { url: newTabUrl };
-      const newTabWouldBeCounted = filterCountedTabs([mockTab]).length > 0;
+      const newTabWouldBeCounted = shouldCountUrl(newTabUrl);
 
       if (newTabWouldBeCounted && countedWindowTabs.length > config.maxWindowTabs) {
         console.log(`Would exceed window tabs limit: ${countedWindowTabs.length}/${config.maxWindowTabs} in window ${windowId} (${targetWindow?.type})`);
@@ -499,6 +539,24 @@ function processTabStateChange(tabId, changeInfo, tab) {
   if (significantChange) {
     console.log(`Tab ${tabId} state changed:`, changeInfo);
 
+    // Re-check limits when a newly created tab receives its real URL.
+    if (newTabsTracker.has(tabId) && changeInfo.url !== undefined && tab?.windowId) {
+      wouldExceedLimits(tab.url || changeInfo.url || 'about:blank', tab.windowId)
+        .then(async (shouldClose) => {
+          if (!shouldClose) return;
+          try {
+            await chrome.tabs.remove(tabId);
+            newTabsTracker.delete(tabId);
+            console.log(`Closed tab ${tabId} after URL update due to limits`);
+          } catch (error) {
+            console.error(`Failed to close tab ${tabId} after URL update:`, error);
+          }
+        })
+        .catch((error) => {
+          console.error(`Error re-checking limits for tab ${tabId}:`, error);
+        });
+    }
+
     // Clean up tracker for tabs that no longer exist
     chrome.tabs.get(tabId).catch(() => {
       if (newTabsTracker.has(tabId)) {
@@ -547,13 +605,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           config.maxWindows = maxWindows;
         }
       }
-      // Handle filter mode
-      if (request.config.filterMode === 'restrictlist' || request.config.filterMode === 'unrestrictlist') {
-        config.filterMode = request.config.filterMode;
+      if (request.config.filterDefaultAction === 'count' || request.config.filterDefaultAction === 'ignore') {
+        config.filterDefaultAction = request.config.filterDefaultAction;
       }
-      // Handle filters array
-      if (Array.isArray(request.config.filters)) {
-        config.filters = request.config.filters;
+      if (Array.isArray(request.config.filterRules)) {
+        config.filterRules = request.config.filterRules;
+        clearGlobRegexCache();
       }
       // Handle window type exclusions arrays
       if (Array.isArray(request.config.excludedWindowTypesForTabs)) {

@@ -198,7 +198,11 @@ function saveConfigToLocalStorage() {
 }
 
 export function loadConfig() {
-  if (!browser || !chrome?.runtime) {
+  if (!browser) {
+    return;
+  }
+
+  if (!chrome?.runtime) {
     // Fallback for non-extension environment - use localStorage
     try {
       const stored = localStorage.getItem('contextLimiterConfig');

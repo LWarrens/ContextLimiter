@@ -81,18 +81,7 @@
 		return 'variant-filled-success';
 	}
 
-	// Local filter mode info string
-	$: filterModeInfo = (() => {
-		const modeText =
-			$config.filterMode === 'restrictlist'
-				? 'Including'
-				: $config.filterMode === 'unrestrictlist'
-					? 'Excluding'
-					: $config.filterMode === 'allowlist'
-						? 'Allow Only'
-						: 'Block Specific';
-		return `Filter Mode: ${modeText} ${$config.filters.length} patterns`;
-	})();
+	$: filterSummaryText = `Default: ${$config.filterDefaultAction === 'count' ? 'Count' : 'Ignore'} | Rules: ${$config.filterRules.length}`;
 </script>
 
 <div class="status-container space-y-6">
@@ -184,19 +173,20 @@
 
 		<!-- Filter Information -->
 		<div class="mt-6 p-4 rounded" style="background-color: var(--color-surface-50);">
-			<p class="text-xm font-medium mb-2">{filterModeInfo}</p>
-			{#if $config.filters.length > 0}
+			<p class="text-xm font-medium mb-2">{filterSummaryText}</p>
+			{#if $config.filterRules.length > 0}
 				<div class="space-y-1">
-					<p class="text-xs" style="color: var(--color-surface-600);">Active patterns:</p>
-					{#each $config.filters.slice(0, 3) as filter}
+					<p class="text-xs" style="color: var(--color-surface-600);">Active rules:</p>
+					{#each $config.filterRules.slice(0, 3) as rule}
 						<code
 							class="text-xm px-2 py-1 rounded block"
-							style="background-color: var(--color-surface-200);">{filter}</code
+							style="background-color: var(--color-surface-200);"
+						>{rule.action}:{rule.pattern}{rule.enabled === false ? ' (disabled)' : ''}</code
 						>
 					{/each}
-					{#if $config.filters.length > 3}
+					{#if $config.filterRules.length > 3}
 						<p class="text-xm" style="color: var(--color-surface-500);">
-							...and {$config.filters.length - 3} more
+							...and {$config.filterRules.length - 3} more
 						</p>
 					{/if}
 				</div>
