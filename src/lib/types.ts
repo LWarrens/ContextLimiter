@@ -3,9 +3,11 @@
 export type FilterAction = 'count' | 'ignore';
 
 export interface FilterRule {
+  target?: 'website' | 'window';
   pattern: string;
   action: FilterAction;
   enabled?: boolean;
+  scope?: 'tabs' | 'windows' | 'both';
 }
 
 export interface TabLimiterConfig {

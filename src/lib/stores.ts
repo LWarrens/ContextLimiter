@@ -1,7 +1,7 @@
 import { derived, writable } from 'svelte/store';
 import { browser } from '$app/environment';
-import { DEFAULT_CONFIG, type TabCounts, type TabLimiterConfig, type WindowType } from './types';
-import { isValidUrlPattern } from './policy';
+import { DEFAULT_CONFIG, type TabCounts, type TabLimiterConfig } from './types';
+import { isValidUrlPattern, migrateWindowExclusions } from './policy';
 
 export type ConnectionState = 'loading' | 'ready' | 'disconnected' | 'error';
 export type SaveState = 'idle' | 'saving' | 'saved' | 'error';
@@ -21,33 +21,7 @@ function extensionRuntime(): typeof chrome.runtime | null {
 }
 
 function normalizeConfig(value: Partial<TabLimiterConfig>): TabLimiterConfig {
-	const next = { ...DEFAULT_CONFIG, ...value };
-	const tabTypes = Array.isArray(value.excludedWindowTypesForTabs) ? value.excludedWindowTypesForTabs : [];
-	const windowTypes = Array.isArray(value.excludedWindowTypesForWindows) ? value.excludedWindowTypesForWindows : [];
-	return {
-		...next,
-		excludedWindowTypesForTabs: tabTypes,
-		excludedWindowTypesForWindows: windowTypes,
-		excludePopupForTabs: tabTypes.includes('popup'),
-		excludeDevtoolsForTabs: tabTypes.includes('devtools'),
-		excludePanelForTabs: tabTypes.includes('panel'),
-		excludeAppForTabs: tabTypes.includes('app'),
-		excludePopupForWindows: windowTypes.includes('popup'),
-		excludeDevtoolsForWindows: windowTypes.includes('devtools'),
-		excludePanelForWindows: windowTypes.includes('panel'),
-		excludeAppForWindows: windowTypes.includes('app')
-	};
-}
-
-export function syncWindowExclusions(current: TabLimiterConfig): TabLimiterConfig {
-	const types: WindowType[] = ['popup', 'devtools', 'panel', 'app'];
-	const excludedFor = (suffix: 'Tabs' | 'Windows') =>
-		types.filter((type) => current[`exclude${type[0].toUpperCase()}${type.slice(1)}For${suffix}` as keyof TabLimiterConfig] === true);
-	return normalizeConfig({
-		...current,
-		excludedWindowTypesForTabs: excludedFor('Tabs'),
-		excludedWindowTypesForWindows: excludedFor('Windows')
-	});
+	return migrateWindowExclusions({ ...DEFAULT_CONFIG, ...value });
 }
 
 function scheduleReconnect() {

@@ -1,3 +1,5 @@
+import { decideRuleAction, migrateWindowExclusions, isValidRuleList, countBrowserState, candidateExceedsLimits } from './rules.js';
+
 // Context Limiter service worker
 // This script manages tab limits based on filters and window counts
 
@@ -40,7 +42,7 @@ let enforcementBlinkVisible = false;
 let actionIconFramesPromise = null;
 
 // Cache compiled glob regexes to avoid recompiling on every tab check
-const globRegexCache = new Map();
+
 
 // Enhanced configuration loading with validation
 function loadConfig() {
@@ -79,7 +81,7 @@ function loadConfig() {
 
       if (Array.isArray(result.tabLimiterConfig.filterRules)) {
         config.filterRules = result.tabLimiterConfig.filterRules;
-        clearGlobRegexCache();
+
       }
 
       // Handle window type exclusions arrays
@@ -121,7 +123,7 @@ function loadConfig() {
       }
 
       // Ensure arrays and flags are in sync (flags take precedence)
-      syncWindowExclusionSettings();
+      config = migrateWindowExclusions(config);
 
       console.log('Loaded and validated config:', config);
     } else {
@@ -130,41 +132,6 @@ function loadConfig() {
     }
     resolve();
   }));
-}
-
-// Sync individual exclusion flags with the arrays
-function syncWindowExclusionSettings() {
-  // Sync the tabs exclusion settings
-  updateExclusionArray('excludedWindowTypesForTabs', [
-    { type: 'popup', flag: 'excludePopupForTabs' },
-    { type: 'devtools', flag: 'excludeDevtoolsForTabs' },
-    { type: 'panel', flag: 'excludePanelForTabs' },
-    { type: 'app', flag: 'excludeAppForTabs' }
-  ]);
-
-  // Sync the windows exclusion settings
-  updateExclusionArray('excludedWindowTypesForWindows', [
-    { type: 'popup', flag: 'excludePopupForWindows' },
-    { type: 'devtools', flag: 'excludeDevtoolsForWindows' },
-    { type: 'panel', flag: 'excludePanelForWindows' },
-    { type: 'app', flag: 'excludeAppForWindows' }
-  ]);
-}
-
-// Helper function to update exclusion arrays based on flags
-function updateExclusionArray(arrayKey, mappings) {
-  // Start with an empty array
-  const newArray = [];
-
-  // Add types that have their flags set to true
-  mappings.forEach(mapping => {
-    if (config[mapping.flag]) {
-      newArray.push(mapping.type);
-    }
-  });
-
-  // Update the array in the config
-  config[arrayKey] = newArray;
 }
 
 // Save configuration to storage
@@ -181,9 +148,7 @@ function saveConfig(callback) {
   });
 }
 
-function clearGlobRegexCache() {
-  globRegexCache.clear();
-}
+
 
 async function getActionIconFrames() {
   if (actionIconFramesPromise) {
@@ -307,96 +272,9 @@ function startEnforcementBlink(reason = 'limit enforced') {
   }, 3000);
 }
 
-// Glob matching function: supports *, ?, and escapes. Case-insensitive.
-function getOrCreateGlobRegex(pattern) {
-  const normalizedPattern = String(pattern || '').trim();
-  if (!normalizedPattern) return null;
-
-  if (globRegexCache.has(normalizedPattern)) {
-    return globRegexCache.get(normalizedPattern);
-  }
-
-  // Escape regex special chars except * and ?
-  let regexStr = normalizedPattern
-    .replace(/([.+^=!:${}()|\[\]\\])/g, '\\$1')
-    .replace(/\*/g, '.*')
-    .replace(/\?/g, '.');
-
-  // Anchor to start/end
-  regexStr = '^' + regexStr + '$';
-
-  try {
-    const compiled = new RegExp(regexStr, 'i');
-    globRegexCache.set(normalizedPattern, compiled);
-    return compiled;
-  } catch (e) {
-    console.error('[ContextLimiter] Invalid glob pattern:', normalizedPattern, e);
-    return null;
-  }
-}
-
-function globMatch(str, pattern) {
-  const regex = getOrCreateGlobRegex(pattern);
-  return regex ? regex.test(str) : false;
-}
-
-// Bare domains are a user-friendly shorthand for matching complete URLs.
-function normalizeUrlPattern(pattern) {
-  const value = String(pattern || '').trim();
-  if (!value || value.includes('://') || value === '*') return value;
-  return (value.includes('.') || value.includes('/')) ? `*://${value}/*` : value;
-}
-
-function toRuleAction(action) {
-  return action === 'ignore' ? 'ignore' : 'count';
-}
-
-function toDefaultAction(action) {
-  return action === 'count' ? 'count' : 'ignore';
-}
-
-function getEffectiveFilterPolicy() {
-  const customRules = Array.isArray(config.filterRules)
-    ? config.filterRules
-      .map((rule) => {
-        const pattern = String(rule?.pattern || '').trim();
-        if (!pattern) return null;
-        return {
-          pattern,
-          action: toRuleAction(rule?.action),
-          enabled: rule?.enabled !== false
-        };
-      })
-      .filter(Boolean)
-    : [];
-
-  return {
-    defaultAction: toDefaultAction(config.filterDefaultAction),
-    rules: customRules
-  };
-}
-
-function getUrlRuleDecision(url, policy) {
-  const rules = Array.isArray(policy?.rules) ? policy.rules : [];
-
-  for (const rule of rules) {
-    if (rule.enabled === false) continue;
-    if (globMatch(url, normalizeUrlPattern(rule.pattern))) {
-      return rule.action;
-    }
-  }
-
-  return policy?.defaultAction === 'count' ? 'count' : 'ignore';
-}
-
-function shouldCountUrl(url) {
-  if (!url) return false;
-  const policy = getEffectiveFilterPolicy();
-  return getUrlRuleDecision(url, policy) === 'count';
-}
-
 // Function to get current tab counts with filtering and active tab titles
 async function getCurrentTabCounts() {
+  await configReady;
   try {
     const [tabs, allWindows] = await Promise.all([
       chrome.tabs.query({}),
@@ -405,27 +283,15 @@ async function getCurrentTabCounts() {
 
     console.log(`Retrieved ${tabs.length} tabs and ${allWindows.length} windows`);
 
-    // Filter windows for tab counting (excludes certain window types from tab limits)
-    const windowsForTabCounting = filterWindowsForTabCounting(allWindows);
-
-    // Filter windows for window counting (excludes certain window types from window limits)
-    const windowsForWindowCounting = filterWindowsForWindowCounting(allWindows);
-
-    // Only count tabs from windows that are included in tab counting
-    const tabsFromCountedWindows = tabs.filter(tab =>
-      windowsForTabCounting.some(window => window.id === tab.windowId)
-    );
-
-    // Use the common function to count tabs from counted windows
-    const countedTabs = filterCountedTabs(tabsFromCountedWindows);
+    const { countedTabs, countedWindows } = countBrowserState(tabs, allWindows, config);
 
     // Create a detailed response with window info (show all windows but indicate which are excluded)
     const tabsByWindow = allWindows.map(win => {
-      const isCountedForTabs = windowsForTabCounting.some(w => w.id === win.id);
-      const isCountedForWindows = windowsForWindowCounting.some(w => w.id === win.id);
+      const isCountedForTabs = decideRuleAction('', win.type, 'tabs', config.filterRules.filter(rule => rule.target === 'window'), 'count').action === 'count';
+      const isCountedForWindows = countedWindows.some(w => w.id === win.id);
 
       const windowTabs = tabs.filter(tab => tab.windowId === win.id);
-      const countedWindowTabs = isCountedForTabs ? filterCountedTabs(windowTabs) : [];
+      const countedWindowTabs = countedTabs.filter(tab => tab.windowId === win.id);
 
       // Find the active tab in this window
       const activeTab = windowTabs.find(tab => tab.active);
@@ -458,7 +324,7 @@ async function getCurrentTabCounts() {
 
     return {
       totalTabs: countedTabs.length,
-      totalWindows: windowsForWindowCounting.length,
+      totalWindows: countedWindows.length,
       tabsByWindow: tabsByWindow
     };
   } catch (err) {
@@ -514,99 +380,13 @@ function broadcastConfigUpdate() {
   }
 }
 
-// Create a common function for filtering tabs to reduce code duplication
-function filterCountedTabs(tabs) {
-  return tabs.filter(t => {
-    return shouldCountUrl(t.url);
-  });
-}
-
-// Filter windows by type for tab counting purposes
-function filterWindowsForTabCounting(windows) {
-  if (!config.excludedWindowTypesForTabs || config.excludedWindowTypesForTabs.length === 0) {
-    return windows;
-  }
-
-  return windows.filter(window => {
-    return !config.excludedWindowTypesForTabs.includes(window.type);
-  });
-}
-
-// Filter windows by type for window counting purposes  
-function filterWindowsForWindowCounting(windows) {
-  if (!config.excludedWindowTypesForWindows || config.excludedWindowTypesForWindows.length === 0) {
-    return windows;
-  }
-
-  return windows.filter(window => {
-    return !config.excludedWindowTypesForWindows.includes(window.type);
-  });
-}
-
-// Check if creating a new tab would exceed limits
-async function wouldExceedLimits(newTabUrl, windowId) {
+// Apply the same scoped rules used by the popup to every enforcement decision.
+async function wouldExceedLimits(newTabUrl, windowId, tabId) {
+  await configReady;
   if (!config.enabled) return false;
-
   try {
-    const [tabs, allWindows] = await Promise.all([
-      chrome.tabs.query({}),
-      chrome.windows.getAll()
-    ]);
-
-    const targetWindow = allWindows.find(w => w.id === windowId);
-    const newTabWouldBeCounted = shouldCountUrl(newTabUrl);
-
-    // Ignored URLs and excluded window types never consume tab capacity. Check
-    // this before global limits so an already-over-limit state cannot close an
-    // unrelated excluded tab.
-    if (!newTabWouldBeCounted || !targetWindow ||
-        (config.excludedWindowTypesForTabs || []).includes(targetWindow.type)) {
-      return false;
-    }
-
-    // Filter windows for tab counting (excludes certain window types from tab limits)
-    const windowsForTabCounting = filterWindowsForTabCounting(allWindows);
-
-    // Filter windows for window counting (excludes certain window types from window limits)
-    const windowsForWindowCounting = filterWindowsForWindowCounting(allWindows);
-
-    // Only count tabs from windows that are included in tab counting
-    const tabsFromCountedWindows = tabs.filter(tab =>
-      windowsForTabCounting.some(window => window.id === tab.windowId)
-    );
-
-    // Check total tabs limit (only from counted windows)
-    const countedTabs = filterCountedTabs(tabsFromCountedWindows);
-    if (countedTabs.length > config.maxTabs) {
-      console.log(`Would exceed total tabs limit: ${countedTabs.length}/${config.maxTabs}`);
-      return true;
-    }
-
-    // Check windows limit (only count windows that are included in window counting)
-    if (windowsForWindowCounting.length > config.maxWindows) {
-      console.log(`Would exceed windows limit: ${windowsForWindowCounting.length}/${config.maxWindows}`);
-      return true;
-    }
-
-    // Check per-window tabs limit
-    if (windowId) {
-      // First check if this window is even counted for tab limiting
-      const isWindowCountedForTabs = windowsForTabCounting.some(w => w.id === windowId);
-
-      if (!isWindowCountedForTabs) {
-        console.log(`Window ${windowId} (${targetWindow?.type}) is excluded from tab counting`);
-        return false; // Don't limit tabs in excluded window types
-      }
-
-      const windowTabs = tabs.filter(tab => tab.windowId === windowId);
-      const countedWindowTabs = filterCountedTabs(windowTabs);
-      if (newTabWouldBeCounted && countedWindowTabs.length > config.maxWindowTabs) {
-        console.log(`Would exceed window tabs limit: ${countedWindowTabs.length}/${config.maxWindowTabs} in window ${windowId} (${targetWindow?.type})`);
-        return true;
-      }
-    }
-
-    return false;
+    const [tabs, windows] = await Promise.all([chrome.tabs.query({}), chrome.windows.getAll()]);
+    return candidateExceedsLimits(tabs, windows, config, { id: tabId, windowId, url: newTabUrl });
   } catch (error) {
     console.error('Error checking limits:', error);
     return false;
@@ -628,7 +408,7 @@ chrome.tabs.onCreated.addListener(async (tab) => {
     console.log(`Tab ${tab.id} created - tracking as new tab`);
 
     // Check if this tab creation would exceed limits
-    if (config.enabled && await wouldExceedLimits(tab.url || 'about:blank', tab.windowId)) {
+    if (config.enabled && await wouldExceedLimits(tab.url || 'about:blank', tab.windowId, tab.id)) {
       console.log(`Closing tab ${tab.id} due to limit exceeded`);
       try {
         await chrome.tabs.remove(tab.id);
@@ -698,7 +478,7 @@ function processTabStateChange(tabId, changeInfo, tab) {
 
     // Re-check limits when a newly created tab receives its real URL.
     if (config.enabled && newTabsTracker.has(tabId) && changeInfo.url !== undefined && tab?.windowId) {
-      configReady.then(() => wouldExceedLimits(tab.url || changeInfo.url || 'about:blank', tab.windowId))
+      configReady.then(() => wouldExceedLimits(tab.url || changeInfo.url || 'about:blank', tab.windowId, tabId))
         .then(async (shouldClose) => {
           if (!shouldClose) return;
           try {
@@ -736,6 +516,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   if (request.action === 'updateConfig') {
     configReady.then(() => {
+    if (request.config?.filterRules !== undefined && !isValidRuleList(request.config.filterRules)) {
+      sendResponse({ success: false, error: 'Invalid rule: check its target, action, and scope.' });
+      return;
+    }
     // Handle reset flag for explicit reset operations
     if (request.reset === true) {
       console.log('Resetting configuration to defaults');
@@ -769,7 +553,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
       if (Array.isArray(request.config.filterRules)) {
         config.filterRules = request.config.filterRules;
-        clearGlobRegexCache();
+
       }
       // Handle window type exclusions arrays
       if (Array.isArray(request.config.excludedWindowTypesForTabs)) {
