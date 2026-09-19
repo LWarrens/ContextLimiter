@@ -1,7 +1,19 @@
 @import "tailwindcss";
 
-html,
-body {
-	@apply !h-[600px] !w-[400px];
-	background-repeat: no-repeat, no-repeat, no-repeat;
-}
+:root { font-family: var(--base-font-family); color: var(--color-surface-900); background: var(--color-surface-200); }
+html, body { min-width: 320px; min-height: 100%; margin: 0; background: var(--color-surface-200); }
+button, input { font: inherit; }
+button { cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--color-primary-400); outline-offset: 2px; }
+.card { background: var(--color-surface-100); border: 1px solid var(--color-surface-300); border-radius: 0.75rem; box-shadow: 0 4px 18px rgb(0 0 0 / 0.16); }
+.badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 0.2rem 0.55rem; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.variant-filled-success { background: #277a4f; color: white; }
+.variant-filled-warning { background: #a86100; color: white; }
+.variant-filled-error, .text-error-500 { background: #a92e37; color: white; }
+.text-success-500 { color: #75d69d; }
+.btn { border: 1px solid var(--color-surface-300); border-radius: 0.4rem; padding: 0.35rem 0.55rem; background: var(--color-surface-200); color: var(--color-surface-900); }
+.btn:hover { border-color: var(--color-primary-400); }
+.input, .add-filter-input { border: 1px solid var(--color-surface-300); border-radius: 0.4rem; background: var(--color-surface-50); color: var(--color-surface-900); }
+.filter-pill { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0.5rem; border: 1px solid var(--color-surface-300); border-radius: 0.5rem; }
+.helper { margin-top: 0.4rem; color: var(--color-surface-600); font-size: 0.78rem; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }

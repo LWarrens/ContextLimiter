@@ -1,289 +1,166 @@
-import { writable, derived } from 'svelte/store';
-import type { TabLimiterConfig, TabCounts } from './types';
-import { DEFAULT_CONFIG } from './types';
+import { derived, writable } from 'svelte/store';
 import { browser } from '$app/environment';
+import { DEFAULT_CONFIG, type TabCounts, type TabLimiterConfig, type WindowType } from './types';
+import { isValidUrlPattern } from './policy';
 
-// Configuration store
-export const config = writable<TabLimiterConfig>(DEFAULT_CONFIG);
+export type ConnectionState = 'loading' | 'ready' | 'disconnected' | 'error';
+export type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 
-// Tab counts store for real-time status
-export const tabCounts = writable<TabCounts>({
-  totalTabs: 0,
-  totalWindows: 0,
-  tabsByWindow: []
-});
+export const config = writable<TabLimiterConfig>({ ...DEFAULT_CONFIG });
+export const tabCounts = writable<TabCounts>({ totalTabs: 0, totalWindows: 0, tabsByWindow: [] });
+export const lastUpdated = writable<Date | null>(null);
+export const connectionState = writable<ConnectionState>('loading');
+export const saveState = writable<SaveState>('idle');
+export const saveError = writable<string | null>(null);
 
-// Last updated timestamp
-export const lastUpdated = writable<Date>(new Date());
-
-// Connection to service worker
 let serviceWorkerPort: chrome.runtime.Port | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-// Initialize connection to service worker
+function extensionRuntime(): typeof chrome.runtime | null {
+	return browser && typeof chrome !== 'undefined' && chrome.runtime ? chrome.runtime : null;
+}
+
+function normalizeConfig(value: Partial<TabLimiterConfig>): TabLimiterConfig {
+	const next = { ...DEFAULT_CONFIG, ...value };
+	const tabTypes = Array.isArray(value.excludedWindowTypesForTabs) ? value.excludedWindowTypesForTabs : [];
+	const windowTypes = Array.isArray(value.excludedWindowTypesForWindows) ? value.excludedWindowTypesForWindows : [];
+	return {
+		...next,
+		excludedWindowTypesForTabs: tabTypes,
+		excludedWindowTypesForWindows: windowTypes,
+		excludePopupForTabs: tabTypes.includes('popup'),
+		excludeDevtoolsForTabs: tabTypes.includes('devtools'),
+		excludePanelForTabs: tabTypes.includes('panel'),
+		excludeAppForTabs: tabTypes.includes('app'),
+		excludePopupForWindows: windowTypes.includes('popup'),
+		excludeDevtoolsForWindows: windowTypes.includes('devtools'),
+		excludePanelForWindows: windowTypes.includes('panel'),
+		excludeAppForWindows: windowTypes.includes('app')
+	};
+}
+
+export function syncWindowExclusions(current: TabLimiterConfig): TabLimiterConfig {
+	const types: WindowType[] = ['popup', 'devtools', 'panel', 'app'];
+	const excludedFor = (suffix: 'Tabs' | 'Windows') =>
+		types.filter((type) => current[`exclude${type[0].toUpperCase()}${type.slice(1)}For${suffix}` as keyof TabLimiterConfig] === true);
+	return normalizeConfig({
+		...current,
+		excludedWindowTypesForTabs: excludedFor('Tabs'),
+		excludedWindowTypesForWindows: excludedFor('Windows')
+	});
+}
+
+function scheduleReconnect() {
+	if (reconnectTimer || !extensionRuntime()) return;
+	reconnectTimer = setTimeout(() => {
+		reconnectTimer = null;
+		connectToServiceWorker();
+	}, 1_000);
+}
+
 function connectToServiceWorker() {
-  if (!browser || !chrome?.runtime) return;
-
-  try {
-    serviceWorkerPort = chrome.runtime.connect({ name: 'popup' });
-
-    serviceWorkerPort.onMessage.addListener((message) => {
-      if (message.action === 'tabCountsUpdated') {
-        tabCounts.set(message.data);
-        lastUpdated.set(new Date());
-      } else if (message.action === 'configUpdated') {
-        // Make sure the UI checkboxes reflect the array values
-        ensureWindowTypeCheckboxSync(message.data);
-        config.update(current => {
-          const keys = Object.keys(message.data) as (keyof TabLimiterConfig)[];
-          let changed = false;
-          for (const key of keys) {
-            if (current[key] !== message.data[key]) {
-              changed = true;
-              break;
-            }
-          }
-          return changed ? message.data : current;
-        });
-      }
-    });
-
-    serviceWorkerPort.onDisconnect.addListener(() => {
-      console.log('Disconnected from service worker');
-      serviceWorkerPort = null;
-      // Try to reconnect after a short delay
-      setTimeout(connectToServiceWorker, 1000);
-    });
-
-    console.log('Connected to service worker');
-  } catch (error) {
-    console.error('Error connecting to service worker:', error);
-  }
+	const runtime = extensionRuntime();
+	if (!runtime || serviceWorkerPort) return;
+	try {
+		serviceWorkerPort = runtime.connect({ name: 'popup' });
+		connectionState.set('ready');
+		serviceWorkerPort.onMessage.addListener((message) => {
+			if (message.action === 'tabCountsUpdated') {
+				tabCounts.set(message.data);
+				lastUpdated.set(new Date());
+			} else if (message.action === 'configUpdated') {
+				config.set(normalizeConfig(message.data));
+			}
+		});
+		serviceWorkerPort.onDisconnect.addListener(() => {
+			serviceWorkerPort = null;
+			connectionState.set('disconnected');
+			scheduleReconnect();
+		});
+	} catch {
+		connectionState.set('error');
+		scheduleReconnect();
+	}
 }
 
-// Helper function to ensure window type checkbox values are synced with arrays
-function ensureWindowTypeCheckboxSync(configData: Partial<TabLimiterConfig>) {
-  if (!configData) return;
-
-  // For tab counting exclusions
-  if (Array.isArray(configData.excludedWindowTypesForTabs)) {
-    configData.excludePopupForTabs = configData.excludedWindowTypesForTabs.includes('popup');
-    configData.excludeDevtoolsForTabs = configData.excludedWindowTypesForTabs.includes('devtools');
-    configData.excludePanelForTabs = configData.excludedWindowTypesForTabs.includes('panel');
-    configData.excludeAppForTabs = configData.excludedWindowTypesForTabs.includes('app');
-  }
-
-  // For window counting exclusions
-  if (Array.isArray(configData.excludedWindowTypesForWindows)) {
-    configData.excludePopupForWindows = configData.excludedWindowTypesForWindows.includes('popup');
-    configData.excludeDevtoolsForWindows = configData.excludedWindowTypesForWindows.includes('devtools');
-    configData.excludePanelForWindows = configData.excludedWindowTypesForWindows.includes('panel');
-    configData.excludeAppForWindows = configData.excludedWindowTypesForWindows.includes('app');
-  }
+async function sendMessage<T>(message: unknown): Promise<T> {
+	const runtime = extensionRuntime();
+	if (!runtime) throw new Error('The extension service worker is unavailable.');
+	return new Promise<T>((resolve, reject) => {
+		runtime.sendMessage(message, (response) => {
+			const error = chrome.runtime.lastError;
+			if (error) reject(new Error(error.message));
+			else resolve(response as T);
+		});
+	});
 }
 
-// Helper function to sync the window type exclusion checkboxes to arrays
-export function syncWindowExclusions(currentConfig: TabLimiterConfig): TabLimiterConfig {
-  const updatedConfig = { ...currentConfig };
-
-  // For tab counting
-  updatedConfig.excludedWindowTypesForTabs = [];
-  if (updatedConfig.excludePopupForTabs) updatedConfig.excludedWindowTypesForTabs.push('popup');
-  if (updatedConfig.excludeDevtoolsForTabs) updatedConfig.excludedWindowTypesForTabs.push('devtools');
-  if (updatedConfig.excludePanelForTabs) updatedConfig.excludedWindowTypesForTabs.push('panel');
-  if (updatedConfig.excludeAppForTabs) updatedConfig.excludedWindowTypesForTabs.push('app');
-
-  // For window counting
-  updatedConfig.excludedWindowTypesForWindows = [];
-  if (updatedConfig.excludePopupForWindows) updatedConfig.excludedWindowTypesForWindows.push('popup');
-  if (updatedConfig.excludeDevtoolsForWindows) updatedConfig.excludedWindowTypesForWindows.push('devtools');
-  if (updatedConfig.excludePanelForWindows) updatedConfig.excludedWindowTypesForWindows.push('panel');
-  if (updatedConfig.excludeAppForWindows) updatedConfig.excludedWindowTypesForWindows.push('app');
-
-  return updatedConfig;
-}
-
-// Initialize connection when browser is available
-if (browser) {
-  connectToServiceWorker();
-}
-
-// Derived stores
 export const isEnabled = derived(config, ($config) => $config.enabled);
+export const filteredTabsDisplay = derived([tabCounts, config], ([counts, cfg]) => `${counts.totalTabs}/${cfg.maxTabs}`);
+export const windowsDisplay = derived([tabCounts, config], ([counts, cfg]) => `${counts.totalWindows}/${cfg.maxWindows}`);
 
-export const filteredTabsDisplay = derived(
-  [tabCounts, config],
-  ([counts, cfg]) => `${counts.totalTabs}/${cfg.maxTabs}`
-);
-
-export const windowsDisplay = derived(
-  [tabCounts, config],
-  ([counts, cfg]) => `${counts.totalWindows}/${cfg.maxWindows}`
-);
-
-// Configuration management functions
-export function updateConfig(updates: Partial<TabLimiterConfig>) {
-  if ('enabled' in updates) {
-    console.log('[ContextLimiter] updateConfig called with enabled:', updates.enabled);
-  }
-  if (!browser || !chrome?.runtime) {
-    config.update(current => {
-      if ('enabled' in updates) {
-        console.log('[ContextLimiter] Local config update (non-extension) enabled:', updates.enabled);
-      }
-      return { ...current, ...updates };
-    });
-    saveConfigToLocalStorage();
-    return;
-  }
-
-  // Optimistically update the local store immediately
-  config.update(current => {
-    if ('enabled' in updates) {
-      console.log('[ContextLimiter] Optimistic config update enabled:', updates.enabled);
-    }
-    return { ...current, ...updates };
-  });
-
-  chrome.runtime.sendMessage({
-    action: 'updateConfig',
-    config: updates
-  }, (response) => {
-    if (response?.success && response.config) {
-      config.update(current => {
-        const keys = Object.keys(updates) as (keyof TabLimiterConfig)[];
-        let changed = false;
-        for (const key of keys) {
-          if (current[key] !== response.config[key]) {
-            changed = true;
-            break;
-          }
-        }
-        if (changed && 'enabled' in response.config) {
-          console.log('[ContextLimiter] Config updated from service worker, enabled:', response.config.enabled);
-        }
-        return changed ? response.config : current;
-      });
-    }
-  });
+export async function updateConfig(updates: Partial<TabLimiterConfig>): Promise<boolean> {
+	saveState.set('saving');
+	saveError.set(null);
+	try {
+		const runtime = extensionRuntime();
+		if (!runtime) {
+			let next = { ...DEFAULT_CONFIG };
+			config.update((current) => (next = normalizeConfig({ ...current, ...updates })));
+			localStorage.setItem('contextLimiterConfig', JSON.stringify(next));
+		} else {
+			const response = await sendMessage<{ success?: boolean; config?: TabLimiterConfig; error?: string }>({ action: 'updateConfig', config: updates });
+			if (!response?.success || !response.config) throw new Error(response?.error || 'Could not save settings.');
+			config.set(normalizeConfig(response.config));
+		}
+		saveState.set('saved');
+		return true;
+	} catch (error) {
+		saveError.set(error instanceof Error ? error.message : 'Could not save settings.');
+		saveState.set('error');
+		return false;
+	}
 }
 
-export function resetConfig() {
-  if (!browser || !chrome?.runtime) {
-    // Fallback for non-extension environment
-    config.set({ ...DEFAULT_CONFIG });
-    saveConfigToLocalStorage();
-    return;
-  }
-
-  chrome.runtime.sendMessage({
-    action: 'updateConfig',
-    reset: true
-  }, (response) => {
-    if (response?.success) {
-      config.set(response.config);
-    }
-  });
+export async function resetConfig(): Promise<boolean> {
+	saveState.set('saving');
+	try {
+		const runtime = extensionRuntime();
+		if (!runtime) return updateConfig(DEFAULT_CONFIG);
+		const response = await sendMessage<{ success?: boolean; config?: TabLimiterConfig; error?: string }>({ action: 'updateConfig', reset: true });
+		if (!response?.success || !response.config) throw new Error(response?.error || 'Could not reset settings.');
+		config.set(normalizeConfig(response.config));
+		saveState.set('saved');
+		return true;
+	} catch (error) {
+		saveError.set(error instanceof Error ? error.message : 'Could not reset settings.');
+		saveState.set('error');
+		return false;
+	}
 }
 
-function saveConfigToLocalStorage() {
-  if (!browser) return;
-
-  config.subscribe(value => {
-    try {
-      localStorage.setItem('contextLimiterConfig', JSON.stringify(value));
-    } catch (error) {
-      console.error('Error saving config:', error);
-    }
-  })();
-}
-
-export function loadConfig() {
-  if (!browser) {
-    return;
-  }
-
-  if (!chrome?.runtime) {
-    // Fallback for non-extension environment - use localStorage
-    try {
-      const stored = localStorage.getItem('contextLimiterConfig');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        const newConfig = { ...DEFAULT_CONFIG, ...parsed };
-
-        // Ensure window type checkbox values are synced with arrays
-        ensureWindowTypeCheckboxSync(newConfig);
-
-        config.set(newConfig);
-      }
-    } catch (error) {
-      console.error('Error loading config from localStorage:', error);
-    }
-    return;
-  }
-
-  chrome.runtime.sendMessage({ action: 'getConfig' }, (response) => {
-    if (response?.config) {
-      // Ensure window type checkbox values are synced with arrays
-      ensureWindowTypeCheckboxSync(response.config);
-      config.set(response.config);
-    }
-  });
+export async function loadConfig() {
+	connectionState.set('loading');
+	try {
+		const runtime = extensionRuntime();
+		if (!runtime) {
+			const stored = localStorage.getItem('contextLimiterConfig');
+			if (stored) config.set(normalizeConfig(JSON.parse(stored)));
+		} else {
+			const response = await sendMessage<{ config?: TabLimiterConfig }>({ action: 'getConfig' });
+			if (response?.config) config.set(normalizeConfig(response.config));
+			connectToServiceWorker();
+		}
+		connectionState.set('ready');
+	} catch {
+		connectionState.set('error');
+	}
 }
 
 export function getCurrentTabCounts() {
-  if (!browser || !chrome?.runtime) {
-    // Fallback for non-extension environment
-    return Promise.resolve({
-      totalTabs: 0,
-      totalWindows: 0,
-      tabsByWindow: []
-    });
-  }
-
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ action: 'getCurrentTabCounts' }, (response) => {
-      resolve(response || {
-        totalTabs: 0,
-        totalWindows: 0,
-        tabsByWindow: []
-      });
-    });
-  });
+	return sendMessage<TabCounts>({ action: 'getCurrentTabCounts' });
 }
 
-// URL pattern validation
-export function isValidUrlPattern(pattern: string): boolean {
-  try {
-    // Allow wildcards
-    if (pattern.includes('*')) {
-      return true;
-    }
+export { isValidUrlPattern };
 
-    // Allow URLs with protocols
-    if (pattern.includes('://')) {
-      return true;
-    }
-
-    // Allow basic domain patterns
-    if (pattern.includes('.')) {
-      return true;
-    }
-
-    // Allow simple domain names or paths
-    if (/^[a-zA-Z0-9\-_\/]+$/.test(pattern)) {
-      return true;
-    }
-
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-// Initialize the store
-loadConfig();
-
-// Add a subscription for config changes to log enabled value
-config.subscribe(cfg => {
-  console.log('[ContextLimiter] config.subscribe: enabled =', cfg.enabled);
-});
+void loadConfig();

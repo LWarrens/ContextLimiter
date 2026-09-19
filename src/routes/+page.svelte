@@ -12,15 +12,9 @@
 		activeTab = tab;
 	}
 
-	function toggleEnabled() {
-		console.log('[ContextLimiter] toggleEnabled called. enabled before:', enabled);
-		updateConfig({ enabled: !enabled });
-		setTimeout(() => {
-			console.log('[ContextLimiter] toggleEnabled after updateConfig. enabled is now:', enabled);
-		}, 100);
+	async function toggleEnabled() {
+		await updateConfig({ enabled: !enabled });
 	}
-	// Svelte store subscription
-	$: $config = $config;
 </script>
 
 <svelte:head>
@@ -37,11 +31,14 @@
 	>
 		<div class="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
 			<div
+				role="tablist"
 				class="flex space-x-1 rounded-lg p-1"
 				style="background-color: var(--color-surface-100);"
 			>
 				<button
 					class="px-4 py-2 rounded-md text-sm font-medium transition-all duration-200"
+					role="tab"
+					aria-selected={activeTab === 'status'}
 					style={activeTab === 'status'
 						? 'background-color: var(--color-surface-200); color: var(--color-surface-900); box-shadow: 0 1px 2px 0 var(--color-surface-300);'
 						: 'color: var(--color-surface-600);'}
@@ -51,6 +48,8 @@
 				</button>
 				<button
 					class="px-4 py-2 rounded-md text-sm font-medium transition-all duration-200"
+					role="tab"
+					aria-selected={activeTab === 'settings'}
 					style={activeTab === 'settings'
 						? 'background-color: var(--color-surface-200); color: var(--color-surface-900); box-shadow: 0 1px 2px 0 var(--color-surface-300);'
 						: 'color: var(--color-surface-600);'}

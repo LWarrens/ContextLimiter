@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { config, tabCounts, lastUpdated, filteredTabsDisplay, windowsDisplay } from '$lib/stores';
+	import { config, tabCounts, lastUpdated, filteredTabsDisplay, windowsDisplay, connectionState } from '$lib/stores';
 	import { onMount } from 'svelte';
 
 	let formattedTime = '';
@@ -12,6 +12,8 @@
 	// Calculate progress percentages for visual indicators
 	$: totalTabsProgress = Math.min(($tabCounts.totalTabs / $config.maxTabs) * 100, 100);
 	$: windowsProgress = Math.min(($tabCounts.totalWindows / $config.maxWindows) * 100, 100);
+	$: isOverTotalTabsMax = $tabCounts.totalTabs > $config.maxTabs;
+	$: isOverTotalWindowsMax = $tabCounts.totalWindows > $config.maxWindows;
 
 	// // Get progress color based on percentage
 	// function getProgressColor(percentage: number): string {
@@ -41,16 +43,12 @@
 		const warnColor = 'orange';
 		const dangerColor = 'red';
 
-		if (percentage < 60) {
-			// Safe zone: pure green
-			return okColor;
-		}
+		if (percentage < 60) return okColor;
 
 		let okStop: number;
 		let warnStop: number;
 
 		if (percentage < 80) {
-			// Green fades from 80% to 40%, orange grows from 20% to 40% from 60 to 80
 			const t = (percentage - 60) / 20;
 			okStop = 80 - t * 40;
 			warnStop = 20 + t * 20;
@@ -58,19 +56,18 @@
 		}
 
 		if (percentage < 90) {
-			// Green fades from 40% to 30%, orange stays at 40%
 			const t = (percentage - 80) / 10;
 			okStop = 40 - t * 10;
 			warnStop = 40;
 			return `linear-gradient(90deg, ${okColor} ${okStop}%, ${warnColor} ${okStop + warnStop}%)`;
 		}
 
-		// Green fades from 30% to 20%, orange shrinks from 40% to 35%, red completes
 		const t = (percentage - 90) / 10;
 		okStop = 30 - t * 10;
 		warnStop = 40 - t * 5;
 
-		return `linear-gradient(90deg, ${okColor} ${okStop}%, ${warnColor} ${okStop + warnStop}%, ${dangerColor} 100%);`;
+		// FIX: removed trailing semicolon inside CSS value
+		return `linear-gradient(90deg, ${okColor} ${okStop}%, ${warnColor} ${okStop + warnStop}%, ${dangerColor} 100%)`;
 	}
 
 	// Get badge variant based on usage
@@ -82,17 +79,26 @@
 	}
 
 	$: filterSummaryText = `Default: ${$config.filterDefaultAction === 'count' ? 'Count' : 'Ignore'} | Rules: ${$config.filterRules.length}`;
+	$: setupNeeded = $config.filterDefaultAction === 'ignore' && $config.filterRules.length === 0;
 </script>
 
 <div class="status-container space-y-6">
 	<!-- Current Status Card -->
 	<section class="card p-6">
+		{#if $connectionState !== 'ready'}
+			<p class="status-message" role="status">
+				{$connectionState === 'loading' ? 'Loading current usage…' : 'Current usage is unavailable. Reopen the popup to retry.'}
+			</p>
+		{/if}
+		{#if setupNeeded}
+			<p class="status-message" role="status">No websites are being counted. Add a rule or choose “Count by default” in Settings.</p>
+		{/if}
 		<!-- Tab Statistics -->
 		<div class="space-y-4">
 			<!-- Total Tabs -->
 			<div class="stat-row">
 				<div class="flex items-center justify-between mb-2">
-					<span class="font-medium">Filtered Tabs</span>
+					<span class="font-medium">Counted Tabs</span>
 					<span class="badge {getBadgeVariant($tabCounts.totalTabs, $config.maxTabs)}">
 						{$filteredTabsDisplay}
 					</span>
@@ -104,9 +110,9 @@
 					></div>
 					<div
 						class="progress-dot"
-						style="left: calc({totalTabsProgress}% - 4px); {totalTabsProgress > 80
-							? `background: ${getProgressColor(totalTabsProgress)};`
-							: ''}"
+						class:over-max={isOverTotalTabsMax}
+						class:near-max={!isOverTotalTabsMax && totalTabsProgress > 80}
+						style="left: clamp(0px, calc({totalTabsProgress}% - 3px), calc(100% - 6px));"
 					></div>
 				</div>
 			</div>
@@ -126,9 +132,9 @@
 					></div>
 					<div
 						class="progress-dot"
-						style="left: calc({windowsProgress}% - 4px); {windowsProgress > 80
-							? `background: ${getProgressColor(windowsProgress)};`
-							: ''}"
+						class:over-max={isOverTotalWindowsMax}
+						class:near-max={!isOverTotalWindowsMax && windowsProgress > 80}
+						style="left: clamp(0px, calc({windowsProgress}% - 3px), calc(100% - 6px));"
 					></div>
 				</div>
 			</div>
@@ -138,32 +144,28 @@
 				<h4 class="font-medium">Per-Window Details</h4>
 				{#each $tabCounts.tabsByWindow as window}
 					{@const windowProgress = Math.min((window.tabCount / $config.maxWindowTabs) * 100, 100)}
+					{@const isOverWindowMax = window.tabCount > $config.maxWindowTabs}
 					<div
 						class="window-detail"
 						style="background-color: var(--color-surface-50); border-radius: var(--radius-container);"
 					>
-						<div class="tab-header">
+						<div class="tab-header mb-2">
 							<span class="tab-title">{window.activeTabTitle}</span>
-							<span
-								class="badge variant-soft {getBadgeVariant(window.tabCount, $config.maxWindowTabs)}"
+							<span class="badge {getBadgeVariant(window.tabCount, $config.maxWindowTabs)}"
+								>{window.tabCount}/{$config.maxWindowTabs}</span
 							>
-								{window.tabCount}/{$config.maxWindowTabs}
-							</span>
 						</div>
 						<div class="progress-bar small">
 							<div
 								class="progress-fill"
-								style="width: {windowProgress}%; background: {getProgressColor(
-									windowProgress
-								)}; {windowsProgress > 90 ? `animation: vibrate 0.2s linear infinite;` : ''}"
+								style="width: {windowProgress}%; background: {getProgressColor(windowProgress)};"
 							></div>
+
 							<div
 								class="progress-dot"
-								style="left: calc({windowProgress}% - 4px); {windowProgress > 90
-									? `background: red; box-shadow: 0 0 5px 3px red; animation: vibrate 0.1s linear infinite;`
-									: windowProgress > 80
-										? `background: #ffa500b5; box-shadow: 0 0 3px 2px #ffa500b5; animation: vibrate 0.4s linear infinite;`
-										: ''}"
+								class:over-max={isOverWindowMax}
+								class:near-max={!isOverWindowMax && windowProgress > 80}
+								style="left: clamp(0px, calc({windowProgress}% - 3px), calc(100% - 6px));"
 							></div>
 						</div>
 					</div>
@@ -181,7 +183,7 @@
 						<code
 							class="text-xm px-2 py-1 rounded block"
 							style="background-color: var(--color-surface-200);"
-						>{rule.action}:{rule.pattern}{rule.enabled === false ? ' (disabled)' : ''}</code
+							>{rule.action}:{rule.pattern}{rule.enabled === false ? ' (disabled)' : ''}</code
 						>
 					{/each}
 					{#if $config.filterRules.length > 3}
@@ -210,6 +212,7 @@
 		height: 0.5rem;
 		border-radius: 9999px;
 		position: relative;
+		overflow: visible;
 	}
 
 	.progress-bar.small {
@@ -222,19 +225,35 @@
 	}
 
 	.progress-dot {
-		position: relative;
-		top: -95%;
-		/* right: -6px; */
-		/* half the size of the dot to center it */
-		width: 4px;
-		height: 90%;
-		/* background: red; */
-		/* border-radius: 50%; */
+		position: absolute;
+		top: 0;
+		width: 6px;
+		height: 100%;
 		border-top-right-radius: 10%;
 		border-bottom-right-radius: 10%;
 		border-top-left-radius: 50%;
 		border-bottom-left-radius: 50%;
 		z-index: 1; /* make sure it's on top */
+	}
+
+	.progress-dot.near-max {
+		background: #ffa500d6;
+		box-shadow: 0 0 3px 2px #ffa50080;
+	}
+
+	.progress-dot.over-max {
+		background: red;
+		box-shadow: 0 0 6px 3px #ff000088;
+		animation: edge-jitter 0.16s linear infinite;
+	}
+
+	.status-message {
+		margin: 0 0 1rem;
+		padding: 0.65rem 0.75rem;
+		border-radius: 0.5rem;
+		background: var(--color-surface-200);
+		color: var(--color-surface-800);
+		font-size: 0.85rem;
 	}
 
 	.window-detail {
@@ -258,5 +277,18 @@
 		white-space: normal;
 		max-width: 220px;
 		overflow-wrap: anywhere;
+	}
+
+	@keyframes edge-jitter {
+		0%,
+		100% {
+			transform: translateX(0);
+		}
+		25% {
+			transform: translateX(2px);
+		}
+		75% {
+			transform: translateX(-2px);
+		}
 	}
 </style>

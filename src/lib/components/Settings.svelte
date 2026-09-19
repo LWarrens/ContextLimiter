@@ -1,21 +1,20 @@
 <script lang="ts">
-	import { config, updateConfig, resetConfig } from '$lib/stores';
+	import { config, updateConfig, resetConfig, saveError, saveState, syncWindowExclusions } from '$lib/stores';
 	import { type FilterAction, type FilterRule, type WindowType } from '$lib/types';
 	import { isValidUrlPattern } from '$lib/stores';
 
-	let saveMessage = '';
-	let saveError = false;
 	let newFilter = '';
 	let newRuleAction: FilterAction = 'count';
 	let filterError = '';
 
 	// Handle numeric input changes
-	function handleNumericChange(field: keyof typeof $config, value: string) {
-		const numValue = parseInt(value);
-		if (!isNaN(numValue) && numValue > 0) {
-			updateConfig({ [field]: numValue });
-			showSaveMessage('Settings saved', false);
+	async function handleNumericChange(field: keyof typeof $config, value: string) {
+		const numValue = Number(value);
+		if (!Number.isSafeInteger(numValue) || numValue <= 0) {
+			showFilterError('Limits must be positive whole numbers');
+			return;
 		}
+		await updateConfig({ [field]: numValue });
 	}
 	// Handle checkbox changes for window type exclusions
 	function handleWindowTypeChange(
@@ -24,28 +23,18 @@
 		windowType: WindowType,
 		isForTabs: boolean
 	) {
-		updateConfig({ [field]: checked });
-
-		// Also update the corresponding array
-		const arrayField = isForTabs ? 'excludedWindowTypesForTabs' : 'excludedWindowTypesForWindows';
-		const currentArray = $config[arrayField] as WindowType[];
-
-		if (checked && !currentArray.includes(windowType)) {
-			updateConfig({ [arrayField]: [...currentArray, windowType] });
-		} else if (!checked && currentArray.includes(windowType)) {
-			updateConfig({ [arrayField]: currentArray.filter((type) => type !== windowType) });
-		}
-
-		showSaveMessage('Settings saved', false);
+		void isForTabs;
+		void windowType;
+		const next = syncWindowExclusions({ ...$config, [field]: checked });
+		return updateConfig(next);
 	}
 
-	function handleDefaultActionChange(action: FilterAction) {
-		updateConfig({ filterDefaultAction: action });
-		showSaveMessage('Settings saved', false);
+	async function handleDefaultActionChange(action: FilterAction) {
+		await updateConfig({ filterDefaultAction: action });
 	}
 
 	// Add new rule
-	function addRule() {
+	async function addRule() {
 		const filter = newFilter.trim();
 
 		if (!filter) {
@@ -67,52 +56,38 @@
 			...$config.filterRules,
 			{ pattern: filter, action: newRuleAction, enabled: true }
 		];
-		updateConfig({ filterRules: nextRules });
+		const saved = await updateConfig({ filterRules: nextRules });
+		if (!saved) return;
 		newFilter = '';
 		filterError = '';
-		showSaveMessage('Rule added', false);
 	}
 
-	function removeRule(index: number) {
+	async function removeRule(index: number) {
 		const nextRules = $config.filterRules.filter((_, i) => i !== index);
-		updateConfig({ filterRules: nextRules });
-		showSaveMessage('Rule removed', false);
+		await updateConfig({ filterRules: nextRules });
 	}
 
-	function toggleRuleEnabled(index: number) {
+	async function toggleRuleEnabled(index: number) {
 		const nextRules = $config.filterRules.map((rule, i) =>
 			i === index ? { ...rule, enabled: rule.enabled === false ? true : false } : rule
 		);
-		updateConfig({ filterRules: nextRules });
-		showSaveMessage('Rule updated', false);
+		await updateConfig({ filterRules: nextRules });
 	}
 
-	function toggleRuleAction(index: number) {
+	async function toggleRuleAction(index: number) {
 		const nextRules = $config.filterRules.map((rule, i) =>
 			i === index
 				? { ...rule, action: rule.action === 'count' ? 'ignore' : 'count' as FilterAction }
 				: rule
 		);
-		updateConfig({ filterRules: nextRules });
-		showSaveMessage('Rule updated', false);
+		await updateConfig({ filterRules: nextRules });
 	}
 
 	// Reset to defaults
-	function handleReset() {
+	async function handleReset() {
 		if (confirm('Are you sure you want to reset all settings to defaults?')) {
-			resetConfig();
-			showSaveMessage('Settings reset to defaults', false);
+			await resetConfig();
 		}
-	}
-
-	// Show save message
-	function showSaveMessage(message: string, isError: boolean) {
-		saveMessage = message;
-		saveError = isError;
-		setTimeout(() => {
-			saveMessage = '';
-			saveError = false;
-		}, 3000);
 	}
 
 	// Show filter error
@@ -323,11 +298,12 @@
 
 		<div class="space-y-4">
 			<div>
-				<p class="label">Default Action</p>
+				<p class="label" id="defaultActionLabel">Default Action</p>
 				<div class="switch-row">
 					<button
 						type="button"
 						class="switch-btn {$config.filterDefaultAction === 'ignore' ? 'active' : ''}"
+						aria-pressed={$config.filterDefaultAction === 'ignore'}
 						on:click={() => handleDefaultActionChange('ignore')}
 					>
 						Ignore by default
@@ -335,6 +311,7 @@
 					<button
 						type="button"
 						class="switch-btn {$config.filterDefaultAction === 'count' ? 'active' : ''}"
+						aria-pressed={$config.filterDefaultAction === 'count'}
 						on:click={() => handleDefaultActionChange('count')}
 					>
 						Count by default
@@ -348,12 +325,13 @@
 
 			<!-- Add Rule -->
 			<div>
-				<p class="label">Add Rule</p>
+				<label class="label" for="newFilter">Add rule</label>
 				<div class="switch-row">
 					<span id="ruleActionLabel" class="sr-only">Rule action</span>
 					<button
 						type="button"
 						class="switch-btn {newRuleAction === 'count' ? 'active' : ''}"
+						aria-pressed={newRuleAction === 'count'}
 						on:click={() => (newRuleAction = 'count')}
 					>
 						Count matches
@@ -361,6 +339,7 @@
 					<button
 						type="button"
 						class="switch-btn {newRuleAction === 'ignore' ? 'active' : ''}"
+						aria-pressed={newRuleAction === 'ignore'}
 						on:click={() => (newRuleAction = 'ignore')}
 					>
 						Ignore matches
@@ -375,12 +354,14 @@
 						type="text"
 						id="newFilter"
 						placeholder="example.com or *.example.com"
+						aria-describedby="ruleHelp"
 						bind:value={newFilter}
 						on:keypress={handleFilterKeypress}
 						class="add-filter-input"
 					/>
-					<button class="add-btn" on:click={addRule}>Add</button>
+					<button class="add-btn" on:click={addRule}>Add rule</button>
 				</div>
+				<p id="ruleHelp" class="helper">Bare domains match any protocol and path. The first enabled match wins.</p>
 				{#if filterError}
 					<p class="text-error-500 text-sm mt-1">{filterError}</p>
 				{/if}
@@ -409,6 +390,7 @@
 								<button
 									class="btn btn-sm variant-filled-error"
 									on:click={() => removeRule(index)}
+									aria-label={`Remove rule ${rule.pattern}`}
 								>
 									×
 								</button>
@@ -449,8 +431,12 @@
 	<div class="flex items-center justify-between">
 		<button class="btn variant-ghost" on:click={handleReset}> Reset to Defaults </button>
 		<div>
-			{#if saveMessage}
-				<p class="text-sm {saveError ? 'text-error-500' : 'text-success-500'}">{saveMessage}</p>
+			{#if $saveState === 'saving'}
+				<p class="text-sm" role="status">Saving changes…</p>
+			{:else if $saveState === 'saved'}
+				<p class="text-sm text-success-500" role="status">Changes saved</p>
+			{:else if $saveState === 'error'}
+				<p class="text-sm text-error-500" role="alert">{$saveError || 'Could not save changes.'}</p>
 			{/if}
 		</div>
 	</div>
@@ -508,7 +494,6 @@
 		padding: 0.5rem 1rem;
 		background: none;
 		border: none;
-		outline: none;
 		color: var(--color-surface-700);
 		font-size: 0.97rem;
 		font-weight: 500;

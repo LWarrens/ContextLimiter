@@ -33,12 +33,23 @@ const newTabsTracker = new Set();
 // Keep track of connected clients (popup, settings)
 const connectedClients = new Set();
 
+// Toolbar alert state for enforced close actions
+let enforcementBlinkInterval = null;
+let enforcementBlinkTimeout = null;
+let enforcementBlinkVisible = false;
+let actionIconFramesPromise = null;
+
 // Cache compiled glob regexes to avoid recompiling on every tab check
 const globRegexCache = new Map();
 
 // Enhanced configuration loading with validation
 function loadConfig() {
-  chrome.storage.sync.get('tabLimiterConfig', (result) => {
+  return new Promise((resolve) => chrome.storage.sync.get('tabLimiterConfig', (result) => {
+    if (chrome.runtime.lastError) {
+      console.error('Could not load configuration:', chrome.runtime.lastError.message);
+      resolve();
+      return;
+    }
     if (result.tabLimiterConfig) {
       // First create a clean config with all defaults
       config = { ...DEFAULT_CONFIG };
@@ -115,9 +126,10 @@ function loadConfig() {
       console.log('Loaded and validated config:', config);
     } else {
       // Initialize with defaults if no configuration exists
-      saveConfig();
+      saveConfig(() => {});
     }
-  });
+    resolve();
+  }));
 }
 
 // Sync individual exclusion flags with the arrays
@@ -158,13 +170,141 @@ function updateExclusionArray(arrayKey, mappings) {
 // Save configuration to storage
 function saveConfig(callback) {
   chrome.storage.sync.set({ 'tabLimiterConfig': config }, () => {
+    if (chrome.runtime.lastError) {
+      const error = chrome.runtime.lastError.message;
+      console.error('Could not save configuration:', error);
+      if (callback) callback(error);
+      return;
+    }
     console.log('Saved config:', config);
-    if (callback) callback();
+    if (callback) callback(null);
   });
 }
 
 function clearGlobRegexCache() {
   globRegexCache.clear();
+}
+
+async function getActionIconFrames() {
+  if (actionIconFramesPromise) {
+    return actionIconFramesPromise;
+  }
+
+  actionIconFramesPromise = (async () => {
+    const response = await fetch(chrome.runtime.getURL('favicon.png'));
+    const blob = await response.blob();
+    const bitmap = await createImageBitmap(blob);
+
+    const width = bitmap.width || 32;
+    const height = bitmap.height || 32;
+
+    const normalCanvas = new OffscreenCanvas(width, height);
+    const normalContext = normalCanvas.getContext('2d', { willReadFrequently: true });
+    if (!normalContext) {
+      throw new Error('Could not create 2d context for normal icon frame');
+    }
+
+    normalContext.clearRect(0, 0, width, height);
+    normalContext.drawImage(bitmap, 0, 0, width, height);
+    const normalImageData = normalContext.getImageData(0, 0, width, height);
+
+    const alertCanvas = new OffscreenCanvas(width, height);
+    const alertContext = alertCanvas.getContext('2d', { willReadFrequently: true });
+    if (!alertContext) {
+      throw new Error('Could not create 2d context for alert icon frame');
+    }
+
+    alertContext.clearRect(0, 0, width, height);
+    alertContext.drawImage(bitmap, 0, 0, width, height);
+    const alertImageData = alertContext.getImageData(0, 0, width, height);
+    const pixels = alertImageData.data;
+
+    for (let i = 0; i < pixels.length; i += 4) {
+      const alpha = pixels[i + 3];
+      if (alpha === 0) continue;
+
+      const red = pixels[i];
+      const green = pixels[i + 1];
+      const blue = pixels[i + 2];
+      const luminance = (red + green + blue) / 3;
+
+      pixels[i] = Math.min(255, 180 + luminance * 0.35);
+      pixels[i + 1] = Math.max(0, luminance * 0.2);
+      pixels[i + 2] = Math.max(0, luminance * 0.2);
+    }
+
+    return {
+      normal: normalImageData,
+      alert: alertImageData
+    };
+  })().catch((error) => {
+    actionIconFramesPromise = null;
+    throw error;
+  });
+
+  return actionIconFramesPromise;
+}
+
+async function setActionIconVisible(visible) {
+  try {
+    const frames = await getActionIconFrames();
+    await chrome.action.setIcon({
+      imageData: visible ? frames.alert : frames.normal
+    });
+  } catch (error) {
+    console.error('[ContextLimiter] Failed to update action icon:', error);
+  }
+}
+
+function setEnforcementBlinkVisible(visible) {
+  enforcementBlinkVisible = visible;
+  void setActionIconVisible(visible);
+
+  chrome.action.setBadgeText({ text: visible ? '!' : '' }).catch((error) => {
+    console.error('[ContextLimiter] Failed to update action badge text:', error);
+  });
+
+  if (visible) {
+    chrome.action.setBadgeBackgroundColor({ color: '#ff2d2d' }).catch((error) => {
+      console.error('[ContextLimiter] Failed to update action badge background:', error);
+    });
+
+    if (chrome.action.setBadgeTextColor) {
+      chrome.action.setBadgeTextColor({ color: '#ffffff' }).catch((error) => {
+        console.error('[ContextLimiter] Failed to update action badge text color:', error);
+      });
+    }
+  }
+}
+
+function startEnforcementBlink(reason = 'limit enforced') {
+  console.log(`[ContextLimiter] Starting action blink: ${reason}`);
+
+  if (enforcementBlinkInterval) {
+    clearInterval(enforcementBlinkInterval);
+    enforcementBlinkInterval = null;
+  }
+
+  if (enforcementBlinkTimeout) {
+    clearTimeout(enforcementBlinkTimeout);
+    enforcementBlinkTimeout = null;
+  }
+
+  setEnforcementBlinkVisible(true);
+
+  enforcementBlinkInterval = setInterval(() => {
+    setEnforcementBlinkVisible(!enforcementBlinkVisible);
+  }, 350);
+
+  enforcementBlinkTimeout = setTimeout(() => {
+    if (enforcementBlinkInterval) {
+      clearInterval(enforcementBlinkInterval);
+      enforcementBlinkInterval = null;
+    }
+
+    setEnforcementBlinkVisible(false);
+    enforcementBlinkTimeout = null;
+  }, 3000);
 }
 
 // Glob matching function: supports *, ?, and escapes. Case-insensitive.
@@ -198,6 +338,13 @@ function getOrCreateGlobRegex(pattern) {
 function globMatch(str, pattern) {
   const regex = getOrCreateGlobRegex(pattern);
   return regex ? regex.test(str) : false;
+}
+
+// Bare domains are a user-friendly shorthand for matching complete URLs.
+function normalizeUrlPattern(pattern) {
+  const value = String(pattern || '').trim();
+  if (!value || value.includes('://') || value === '*') return value;
+  return (value.includes('.') || value.includes('/')) ? `*://${value}/*` : value;
 }
 
 function toRuleAction(action) {
@@ -234,7 +381,7 @@ function getUrlRuleDecision(url, policy) {
 
   for (const rule of rules) {
     if (rule.enabled === false) continue;
-    if (globMatch(url, rule.pattern)) {
+    if (globMatch(url, normalizeUrlPattern(rule.pattern))) {
       return rule.action;
     }
   }
@@ -406,6 +553,17 @@ async function wouldExceedLimits(newTabUrl, windowId) {
       chrome.windows.getAll()
     ]);
 
+    const targetWindow = allWindows.find(w => w.id === windowId);
+    const newTabWouldBeCounted = shouldCountUrl(newTabUrl);
+
+    // Ignored URLs and excluded window types never consume tab capacity. Check
+    // this before global limits so an already-over-limit state cannot close an
+    // unrelated excluded tab.
+    if (!newTabWouldBeCounted || !targetWindow ||
+        (config.excludedWindowTypesForTabs || []).includes(targetWindow.type)) {
+      return false;
+    }
+
     // Filter windows for tab counting (excludes certain window types from tab limits)
     const windowsForTabCounting = filterWindowsForTabCounting(allWindows);
 
@@ -433,7 +591,6 @@ async function wouldExceedLimits(newTabUrl, windowId) {
     // Check per-window tabs limit
     if (windowId) {
       // First check if this window is even counted for tab limiting
-      const targetWindow = allWindows.find(w => w.id === windowId);
       const isWindowCountedForTabs = windowsForTabCounting.some(w => w.id === windowId);
 
       if (!isWindowCountedForTabs) {
@@ -443,8 +600,6 @@ async function wouldExceedLimits(newTabUrl, windowId) {
 
       const windowTabs = tabs.filter(tab => tab.windowId === windowId);
       const countedWindowTabs = filterCountedTabs(windowTabs);
-      const newTabWouldBeCounted = shouldCountUrl(newTabUrl);
-
       if (newTabWouldBeCounted && countedWindowTabs.length > config.maxWindowTabs) {
         console.log(`Would exceed window tabs limit: ${countedWindowTabs.length}/${config.maxWindowTabs} in window ${windowId} (${targetWindow?.type})`);
         return true;
@@ -466,6 +621,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 // Track newly created tabs
 chrome.tabs.onCreated.addListener(async (tab) => {
+  await configReady;
   if (tab.id) {
     // Add this tab to our new tabs tracker
     newTabsTracker.add(tab.id);
@@ -476,6 +632,7 @@ chrome.tabs.onCreated.addListener(async (tab) => {
       console.log(`Closing tab ${tab.id} due to limit exceeded`);
       try {
         await chrome.tabs.remove(tab.id);
+        startEnforcementBlink('tab closed on creation');
         // Show notification or could send message to popup if it's open
         console.log(`Tab ${tab.id} was closed due to tab limits`);
         return; // Don't continue with normal processing
@@ -540,13 +697,14 @@ function processTabStateChange(tabId, changeInfo, tab) {
     console.log(`Tab ${tabId} state changed:`, changeInfo);
 
     // Re-check limits when a newly created tab receives its real URL.
-    if (newTabsTracker.has(tabId) && changeInfo.url !== undefined && tab?.windowId) {
-      wouldExceedLimits(tab.url || changeInfo.url || 'about:blank', tab.windowId)
+    if (config.enabled && newTabsTracker.has(tabId) && changeInfo.url !== undefined && tab?.windowId) {
+      configReady.then(() => wouldExceedLimits(tab.url || changeInfo.url || 'about:blank', tab.windowId))
         .then(async (shouldClose) => {
           if (!shouldClose) return;
           try {
             await chrome.tabs.remove(tabId);
             newTabsTracker.delete(tabId);
+            startEnforcementBlink('tab closed after url update');
             console.log(`Closed tab ${tabId} after URL update due to limits`);
           } catch (error) {
             console.error(`Failed to close tab ${tabId} after URL update:`, error);
@@ -573,10 +731,11 @@ function processTabStateChange(tabId, changeInfo, tab) {
 // Listen for messages from popup or settings page
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'getConfig') {
-    sendResponse({ config });
-    return;
+    configReady.then(() => sendResponse({ config }));
+    return true;
   }
   if (request.action === 'updateConfig') {
+    configReady.then(() => {
     // Handle reset flag for explicit reset operations
     if (request.reset === true) {
       console.log('Resetting configuration to defaults');
@@ -648,10 +807,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       syncWindowExclusionSettings();
     }
     // Save the updated configuration and only respond after saving
-    saveConfig(() => {
+    saveConfig((error) => {
+      if (error) {
+        sendResponse({ success: false, error });
+        return;
+      }
       sendResponse({ success: true, config });
       broadcastTabCounts();
       broadcastConfigUpdate();
+    });
     });
     return true; // Required for async response
   }
@@ -674,7 +838,7 @@ chrome.runtime.onConnect.addListener((port) => {
   connectedClients.add(port);
 
   // Send initial config and tab counts
-  getCurrentTabCounts().then(tabCounts => {
+  configReady.then(() => getCurrentTabCounts()).then(tabCounts => {
     port.postMessage({
       action: 'tabCountsUpdated',
       data: tabCounts
@@ -692,7 +856,8 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 });
 
-// Initialize
-loadConfig();
+// Initialize once. Extension workers can restart at any time, so event paths
+// wait for this promise before serving or enforcing configuration.
+const configReady = loadConfig();
 
 console.log('Context Limiter service worker initialized');

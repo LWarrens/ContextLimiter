@@ -28,7 +28,8 @@
 
 @font-face {
 	font-family: 'Fira Sans';
-	src: url('/static/FiraSans-Regular.ttf') format('truetype');
+	src: url('/FiraSans-Regular.ttf') format('truetype');
+	font-display: swap;
 }
 
 @theme {
